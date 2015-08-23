@@ -81,6 +81,12 @@ object CassandraSparkBuild extends Build {
     dependencies = Seq(connector)
   )
 
+  lazy val refDoc = Project(
+    id = s"$namespace-doc",
+    base = file(s"$namespace-doc"),
+    settings = defaultSettings ++ Seq(libraryDependencies ++= Dependencies.spark)
+  ) dependsOn(connector)
+
   def crossBuildPath(base: sbt.File, v: String): sbt.File = base / s"scala-$v" / "src"
 
   /* templates */
