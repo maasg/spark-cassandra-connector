@@ -2,6 +2,7 @@ package org.apache.spark.sql.cassandra
 
 import java.util.NoSuchElementException
 
+import com.datastax.spark.connector.util.ConfigParameter
 import org.apache.commons.lang.StringUtils
 import org.apache.spark.sql.sources.DataSourceStrategy
 import org.apache.spark.{SparkConf, SparkContext}
@@ -105,11 +106,26 @@ object CassandraSQLContext {
   // Other source tables don't have keyspace concept. We should make
   // an effort to set CassandraSQLContext a more database like to join
   // tables from other sources. Keyspace is equivalent to database in SQL world
+  val ReferenceSection = "Cassandra SQL Context Options"
+
   val CassandraSqlKSNameProperty = "spark.cassandra.sql.keyspace"
+  val CassandraSqlKSNameDescription = """Sets the default keyspace"""
+  val KSNameParam = ConfigParameter(
+   CassandraSqlKSNameProperty,
+   ReferenceSection,
+   None,
+   CassandraSqlKSNameDescription)
+
   val CassandraSqlClusterNameProperty = "spark.cassandra.sql.cluster"
+  val CassandraSqlClusterNameDescription = "Sets the default Cluster to inherit configuration from"
+  val SqlClusterParam = ConfigParameter(
+    CassandraSqlClusterNameProperty,
+    ReferenceSection,
+    None,
+    CassandraSqlClusterNameDescription)
 
   val Properties = Seq(
-    CassandraSqlKSNameProperty,
-    CassandraSqlClusterNameProperty
+    KSNameParam,
+    SqlClusterParam
   )
 }

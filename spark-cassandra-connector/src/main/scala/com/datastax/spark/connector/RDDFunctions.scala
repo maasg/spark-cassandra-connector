@@ -47,7 +47,7 @@ class RDDFunctions[T](rdd: RDD[T]) extends WritableToCassandra[T] with Serializa
    * @param columns Selects the columns to save data to.
    *                Uses only the unique column names, and you must select at least all primary key
    *                 columns. All other fields are discarded. Non-selected property/column names are left unchanged.
-   *                 This parameter does not affect table creation.
+   *                 This name does not affect table creation.
    * @param writeConf additional configuration object allowing to set consistency level, batch size, etc.
    * @param connector optional, implicit connector to Cassandra
    * @param rwf factory for obtaining the row writer to be used to extract column values
@@ -72,7 +72,7 @@ class RDDFunctions[T](rdd: RDD[T]) extends WritableToCassandra[T] with Serializa
    * @param columns Selects the columns to save data to.
    *                Uses only the unique column names, and you must select at least all primary key
    *                 columns. All other fields are discarded. Non-selected property/column names are left unchanged.
-   *                 This parameter does not affect table creation.
+   *                 This name does not affect table creation.
    * @param writeConf additional configuration object allowing to set consistency level, batch size, etc.
    * @param connector optional, implicit connector to Cassandra
    * @param rwf factory for obtaining the row writer to be used to extract column values
@@ -107,7 +107,7 @@ class RDDFunctions[T](rdd: RDD[T]) extends WritableToCassandra[T] with Serializa
    * normal [[com.datastax.spark.connector.rdd.CassandraTableScanRDD]] takes.
    *
    * By default this method only uses the Partition Key for joining but any combination of columns
-   * which are acceptable to C* can be used in the join. Specify columns using joinColumns as a parameter
+   * which are acceptable to C* can be used in the join. Specify columns using joinColumns as a name
    * or the on() method.
    *
    * Example With Prior Repartitioning: {{{
