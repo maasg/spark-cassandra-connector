@@ -24,12 +24,12 @@ object RefBuilder {
           case Some(defaultValue) => defaultValue
           case None => None
         }
-        s"${parameter.name}|$default|${parameter.description.replace("\n", " ")}"
+        s"${parameter.name} | $default | ${parameter.description.replace("\n", " ")}"
       }.mkString("\n")
 
       s"""## $section
            |$TableHeader
-           |-|-|-
+           |--- | --- | ---
            |$paramTable""".stripMargin
     }
     Header + markdown.mkString("\n\n") + Footer
