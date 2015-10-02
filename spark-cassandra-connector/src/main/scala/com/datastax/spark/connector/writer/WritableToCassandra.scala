@@ -4,6 +4,8 @@ import com.datastax.spark.connector.ColumnSelector
 import com.datastax.spark.connector.cql.CassandraConnector
 import org.apache.spark.SparkContext
 
+import scala.util.Try
+
 abstract class WritableToCassandra[T] {
 
   def sparkContext: SparkContext
@@ -46,5 +48,14 @@ abstract class WritableToCassandra[T] {
                       columnNames: ColumnSelector,
                       writeConf: WriteConf)
                      (implicit connector: CassandraConnector, rwf: RowWriterFactory[T])
+
+
+  def saveToCassandra[U](keyspaceName: T=>String,
+                         data: T=>U,
+                         tableName: String,
+                         columnNames: ColumnSelector,
+                         writeConf: WriteConf)
+                        (implicit connector: CassandraConnector, rwf: RowWriterFactory[U]): Array[(String,Try[Unit])]
+
 
 }

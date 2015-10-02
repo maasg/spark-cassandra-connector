@@ -14,6 +14,7 @@ import org.apache.spark.SparkContext._
 import org.apache.spark.rdd.RDD
 
 import scala.reflect.ClassTag
+import scala.util.{Success, Try}
 
 /** Provides Cassandra-specific methods on [[org.apache.spark.rdd.RDD RDD]] */
 class RDDFunctions[T](rdd: RDD[T]) extends WritableToCassandra[T] with Serializable {
@@ -36,6 +37,20 @@ class RDDFunctions[T](rdd: RDD[T]) extends WritableToCassandra[T] with Serializa
     val writer = TableWriter(connector, keyspaceName, tableName, columns, writeConf)
     rdd.sparkContext.runJob(rdd, writer.write _)
   }
+
+  def saveToCassandra[U](keyspaceFunc: T=>String,
+    dataFunc: T=>U,
+    tableName: String,
+    columnNames: ColumnSelector = AllColumns,
+    writeConf: WriteConf = WriteConf.fromSparkConf(sparkContext.getConf))(
+  implicit connector: CassandraConnector = CassandraConnector(sparkContext.getConf),
+   rwf: RowWriterFactory[U]): Array[(String,Try[Unit])] = {
+    Array(("", Success()))
+    // val writer = DynamicKeyspaceWritter(connector)
+    // sparkContext.runJob(rdd, writer.write _, writer.write)
+  }
+
+
 
   /**
    * Saves the data from [[org.apache.spark.rdd.RDD RDD]] to a new table defined by the given `TableDef`.
