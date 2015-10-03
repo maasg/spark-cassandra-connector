@@ -15,119 +15,18 @@ import org.apache.spark.{Logging, TaskContext}
 
 import scala.collection._
 
-/** Writes RDD data into given Cassandra table.
-  * Individual column values are extracted from RDD objects using given [[RowWriter]]
-  * Then, data are inserted into Cassandra with batches of CQL INSERT statements.
-  * Each RDD partition is processed by a single thread. */
-class TableWriter[T] private (
-    connector: CassandraConnector,
-    tableDef: TableDef,
-    columnSelector: IndexedSeq[ColumnRef],
-    rowWriter: RowWriter[T],
-    writeConf: WriteConf) extends Serializable with Logging {
 
+private[connector] case class WriterContext[T](rowWriter: RowWriter[T], writeConf: WriteConf, tableDef:TableDef, columnSelector: IndexedSeq[ColumnRef]) {
   type ColumnSelector = IndexedSeq[ColumnRef]
+  val columnNames = rowWriter.columnNames diff writeConf.optionPlaceholders
+  val columns:Seq[ColumnDef] = columnNames map(tableDef.columnByName)
+  val isCounterUpdate: Boolean = tableDef.columns.exists(_.isCounterColumn)
+  val containsCollectionBehaviors: Boolean = columnSelector.exists(_.isInstanceOf[CollectionColumnName])
+  val keyspaceName:String = tableDef.keyspaceName
+  val tableName = tableDef.tableName
+  val batchType = if (isCounterUpdate) Type.COUNTER else Type.UNLOGGED
 
-//  val keyspaceName = tableDef.keyspaceName
-//  val tableName = tableDef.tableName
-
-  def columns(rowWriter: RowWriter[T], writeConf: WriteConf, tableDef:TableDef):Seq[ColumnDef] =
-    columnNames(rowWriter, writeConf).map(tableDef.columnByName)
-
-
-  private val isCounterUpdate: TableDef => Boolean = tableDef =>
-    tableDef.columns.exists(_.isCounterColumn)
-
-  private val containsCollectionBehaviors: ColumnSelector => Boolean = columnSelector =>
-    columnSelector.exists(_.isInstanceOf[CollectionColumnName])
-
-  def columnNames(rowWriter: RowWriter[T], writeConf: WriteConf) = rowWriter.columnNames diff writeConf.optionPlaceholders
-
-  private def prepareStatement(session: Session, keyspace:String, tableDef:TableDef, writeConf: WriteConf, rowWriter:RowWriter[T], columnSelector: ColumnSelector ): PreparedStatement = {
-    val keyspaceName = tableDef.keyspaceName
-    val tableName = tableDef.tableName
-    val colNames = columnNames(rowWriter, writeConf)
-    val colDef = columns(rowWriter, writeConf, tableDef)
-    val queryTemplate = if (isCounterUpdate(tableDef) || containsCollectionBehaviors(columnSelector)) {
-      TableWriter.mkUpdateQueryTemplate(keyspaceName,tableName,colDef, columnSelector)
-    } else {
-      TableWriter.mkInsertQueryTemplate(keyspaceName, tableName, colNames, writeConf)
-    }
-
-    try {
-      session.prepare(queryTemplate)
-    }
-    catch {
-      case t: Throwable =>
-        throw new IOException(s"Failed to prepare statement $queryTemplate: ${t.getMessage}", t)
-    }
-  }
-
-  def batchRoutingKey(session: Session, keyspaceName:String, routingKeyGenerator: RoutingKeyGenerator,
-                      writeConf:WriteConf)(bs: BoundStatement): Any = {
-
-    def setRoutingKeyIfMissing(bSttmt: BoundStatement): Unit =
-      if (bSttmt.getRoutingKey == null) {
-        bSttmt.setRoutingKey(routingKeyGenerator(bSttmt))
-      }
-
-    writeConf.batchGroupingKey match {
-      case BatchGroupingKey.None => 0
-
-      case BatchGroupingKey.ReplicaSet =>
-        setRoutingKeyIfMissing(bs)
-        session.getCluster.getMetadata.getReplicas(keyspaceName, bs.getRoutingKey).hashCode() // hash code is enough
-
-      case BatchGroupingKey.Partition =>
-        setRoutingKeyIfMissing(bs)
-        bs.getRoutingKey.duplicate()
-    }
-  }
-
-  /** Main entry point */
-  def write(taskContext: TaskContext, data: Iterator[T]) {
-    val keyspace = tableDef.keyspaceName
-    val tableName = tableDef.tableName
-    val colNames = columnNames(rowWriter, writeConf)
-    val updater = OutputMetricsUpdater(taskContext, writeConf)
-    connector.withSessionDo { session =>
-      val rowIterator = new CountingIterator(data)
-      val stmt = prepareStatement(session, keyspace, tableDef, writeConf, rowWriter, columnSelector)
-        stmt.setConsistencyLevel(writeConf.consistencyLevel)
-      val queryExecutor = new QueryExecutor(session, writeConf.parallelismLevel,
-        Some(updater.batchFinished(success = true, _, _, _)), Some(updater.batchFinished(success = false, _, _, _)))
-      val routingKeyGenerator = new RoutingKeyGenerator(tableDef, colNames)
-      val batchType = if (isCounterUpdate(tableDef)) Type.COUNTER else Type.UNLOGGED
-      val boundStmtBuilder = new BoundStatementBuilder(rowWriter, stmt)
-      val batchStmtBuilder = new BatchStatementBuilder(batchType, routingKeyGenerator, writeConf.consistencyLevel)
-      val batchKeyGenerator = batchRoutingKey(session, keyspace, routingKeyGenerator, writeConf) _
-      val batchBuilder = new GroupingBatchBuilder(boundStmtBuilder, batchStmtBuilder, batchKeyGenerator,
-        writeConf.batchSize, writeConf.batchGroupingBufferSize, rowIterator)
-      val rateLimiter = new RateLimiter((writeConf.throughputMiBPS * 1024 * 1024).toLong, 1024 * 1024)
-
-      logDebug(s"Writing data partition to $keyspace.$tableName in batches of ${writeConf.batchSize}.")
-
-      for (stmtToWrite <- batchBuilder) {
-        queryExecutor.executeAsync(stmtToWrite)
-        assert(stmtToWrite.bytesCount > 0)
-        rateLimiter.maybeSleep(stmtToWrite.bytesCount)
-      }
-
-      queryExecutor.waitForCurrentlyExecutingTasks()
-
-      if (!queryExecutor.successful)
-        throw new IOException(s"Failed to write statements to $keyspace.$tableName.")
-
-      val duration = updater.finish() / 1000000000d
-      logInfo(f"Wrote ${rowIterator.count} rows to $keyspace.$tableName in $duration%.3f s.")
-    }
-  }
-}
-
-object TableWriter {
-
-  private[connector] def mkInsertQueryTemplate(keyspaceName: String, tableName:String,
-                                                    columnNames:Seq[String], writeConf: WriteConf): String = {
+  def insertQueryTemplate: String = {
     val quotedColumnNames: Seq[String] = columnNames.map(quote)
     val columnSpec = quotedColumnNames.mkString(", ")
     val valueSpec = quotedColumnNames.map(":" + _).mkString(", ")
@@ -150,8 +49,7 @@ object TableWriter {
     s"INSERT INTO ${quote(keyspaceName)}.${quote(tableName)} ($columnSpec) VALUES ($valueSpec) $optionsSpec".trim
   }
 
-  private[connector] def mkUpdateQueryTemplate(keyspaceName:String, tableName: String, columns: Seq[ColumnDef],
-                                                    columnSelector: IndexedSeq[ColumnRef]): String = {
+  def updateQueryTemplate: String = {
     val (primaryKey, regularColumns) = columns.partition(_.isPrimaryKeyColumn)
     val (counterColumns, nonCounterColumns) = regularColumns.partition(_.isCounterColumn)
 
@@ -178,6 +76,94 @@ object TableWriter {
 
     s"UPDATE ${quote(keyspaceName)}.${quote(tableName)} SET $setClause WHERE $whereClause"
   }
+
+  lazy val queryTemplate = if (isCounterUpdate || containsCollectionBehaviors) {
+    updateQueryTemplate
+  } else {
+    insertQueryTemplate
+  }
+
+}
+
+
+/** Writes RDD data into given Cassandra table.
+  * Individual column values are extracted from RDD objects using given [[RowWriter]]
+  * Then, data are inserted into Cassandra with batches of CQL INSERT statements.
+  * Each RDD partition is processed by a single thread. */
+private[connector] class TableWriter[T] private (connector: CassandraConnector, writerCtx: WriterContext[T]) extends Serializable with Logging {
+
+  private def prepareStatement(session: Session, writerCtx: WriterContext[T]): PreparedStatement = {
+    try {
+      session.prepare(writerCtx.queryTemplate)
+    }
+    catch {
+      case t: Throwable =>
+        throw new IOException(s"Failed to prepare statement ${writerCtx.queryTemplate}: ${t.getMessage}", t)
+    }
+  }
+
+  def batchRoutingKey(session: Session, keyspaceName:String, routingKeyGenerator: RoutingKeyGenerator,
+                      writeConf:WriteConf)(bs: BoundStatement): Any = {
+
+    def setRoutingKeyIfMissing(bSttmt: BoundStatement): Unit =
+      if (bSttmt.getRoutingKey == null) {
+        bSttmt.setRoutingKey(routingKeyGenerator(bSttmt))
+      }
+
+    writeConf.batchGroupingKey match {
+      case BatchGroupingKey.None => 0
+
+      case BatchGroupingKey.ReplicaSet =>
+        setRoutingKeyIfMissing(bs)
+        session.getCluster.getMetadata.getReplicas(keyspaceName, bs.getRoutingKey).hashCode() // hash code is enough
+
+      case BatchGroupingKey.Partition =>
+        setRoutingKeyIfMissing(bs)
+        bs.getRoutingKey.duplicate()
+    }
+  }
+
+  /** Main entry point */
+  def writeToTable(taskContext: TaskContext, data: Iterator[T]) {
+    val keyspace = writerCtx.keyspaceName
+    val tableName = writerCtx.tableName
+    val colNames = writerCtx.columnNames
+    val updater = OutputMetricsUpdater(taskContext, writerCtx.writeConf)
+    connector.withSessionDo { session =>
+      val rowIterator = new CountingIterator(data)
+      val stmt = prepareStatement(session, writerCtx)
+        stmt.setConsistencyLevel(writerCtx.writeConf.consistencyLevel)
+      val queryExecutor = new QueryExecutor(session, writerCtx.writeConf.parallelismLevel,
+        Some(updater.batchFinished(success = true, _, _, _)), Some(updater.batchFinished(success = false, _, _, _)))
+      val routingKeyGenerator = new RoutingKeyGenerator(writerCtx.tableDef, colNames)
+
+      val boundStmtBuilder = new BoundStatementBuilder(writerCtx.rowWriter, stmt)
+      val batchStmtBuilder = new BatchStatementBuilder(writerCtx.batchType, routingKeyGenerator, writerCtx.writeConf.consistencyLevel)
+      val batchKeyGenerator = batchRoutingKey(session, keyspace, routingKeyGenerator, writerCtx.writeConf) _
+      val batchBuilder = new GroupingBatchBuilder(boundStmtBuilder, batchStmtBuilder, batchKeyGenerator,
+        writerCtx.writeConf.batchSize, writerCtx.writeConf.batchGroupingBufferSize, rowIterator)
+      val rateLimiter = new RateLimiter((writerCtx.writeConf.throughputMiBPS * 1024 * 1024).toLong, 1024 * 1024)
+
+      logDebug(s"Writing data partition to $keyspace.$tableName in batches of ${writerCtx.writeConf.batchSize}.")
+
+      for (stmtToWrite <- batchBuilder) {
+        queryExecutor.executeAsync(stmtToWrite)
+        assert(stmtToWrite.bytesCount > 0)
+        rateLimiter.maybeSleep(stmtToWrite.bytesCount)
+      }
+
+      queryExecutor.waitForCurrentlyExecutingTasks()
+
+      if (!queryExecutor.successful)
+        throw new IOException(s"Failed to write statements to $keyspace.$tableName.")
+
+      val duration = updater.finish() / 1000000000d
+      logInfo(f"Wrote ${rowIterator.count} rows to $keyspace.$tableName in $duration%.3f s.")
+    }
+  }
+}
+
+object TableWriter {
 
   private def checkMissingColumns(table: TableDef, columnNames: Seq[String]) {
     val allColumnNames = table.columns.map(_.columnName)
@@ -279,6 +265,8 @@ object TableWriter {
       selectedColumns ++ optionColumns.map(_.ref))
 
     checkColumns(tableDef, selectedColumns)
-    new TableWriter[T](connector, tableDef, selectedColumns, rowWriter, writeConf)
+
+    val ctx = WriterContext[T](rowWriter, writeConf, tableDef, selectedColumns)
+    new TableWriter[T](connector, ctx)
   }
 }
