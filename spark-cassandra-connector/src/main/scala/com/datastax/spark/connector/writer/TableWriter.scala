@@ -3,6 +3,7 @@ package com.datastax.spark.connector.writer
 import java.io.IOException
 
 import com.datastax.spark.connector.types.{MapType, ListType, ColumnType}
+import com.google.common.cache.{CacheLoader, CacheBuilder, LoadingCache}
 import org.apache.spark.metrics.OutputMetricsUpdater
 
 import com.datastax.driver.core.BatchStatement.Type
@@ -14,7 +15,7 @@ import com.datastax.spark.connector.util.Quote._
 import org.apache.spark.{Logging, TaskContext}
 
 import scala.collection._
-import scala.util.{Failure, Try}
+import scala.util.{Success, Failure, Try}
 
 
 private[connector] case class WriterContext[T](rowWriter: RowWriter[T], writeConf: WriteConf, tableDef:TableDef, columnSelector: IndexedSeq[ColumnRef]) {
@@ -165,20 +166,27 @@ private[connector] class TableWriter[T] private (connector: CassandraConnector, 
 
 object TableWriter {
 
-  private def checkMissingColumns(table: TableDef, columnNames: Seq[String]) {
+  type Check = Try[Unit]
+  def validate[A](p:Boolean)(throwable: () => Throwable): Check = {
+    if (p) Failure(throwable()) else Success(())
+  }
+  def checkAll(checks:Seq[Check]): Check = checks.find(_.isFailure).getOrElse(Success(()))
+
+  private def checkMissingColumns(table: TableDef, columnNames: Seq[String]): Check = {
     val allColumnNames = table.columns.map(_.columnName)
     val missingColumns = columnNames.toSet -- allColumnNames
-    if (missingColumns.nonEmpty)
-      throw new IllegalArgumentException(
-        s"Column(s) not found: ${missingColumns.mkString(", ")}")
+    validate(missingColumns.nonEmpty) {
+      () => new IllegalArgumentException(s"Column(s) not found: ${missingColumns.mkString(", ")}")
+    }
   }
 
-  private def checkMissingPrimaryKeyColumns(table: TableDef, columnNames: Seq[String]) {
+  private def checkMissingPrimaryKeyColumns(table: TableDef, columnNames: Seq[String]): Check = {
     val primaryKeyColumnNames = table.primaryKey.map(_.columnName)
     val missingPrimaryKeyColumns = primaryKeyColumnNames.toSet -- columnNames
-    if (missingPrimaryKeyColumns.nonEmpty)
-      throw new IllegalArgumentException(
+    validate (missingPrimaryKeyColumns.nonEmpty) {
+      () => new IllegalArgumentException(
         s"Some primary key columns are missing in RDD or have not been selected: ${missingPrimaryKeyColumns.mkString(", ")}")
+    }
   }
 
   /**
@@ -186,12 +194,12 @@ object TableWriter {
    * Check whether prepend is used on any Sets or Maps
    * Check whether remove is used on Maps
    */
-  private def checkCollectionBehaviors(table: TableDef, columnRefs: IndexedSeq[ColumnRef]) {
+  private def checkCollectionBehaviors(table: TableDef, columnRefs: IndexedSeq[ColumnRef]):Check = {
     val tableCollectionColumns = table.columns.filter(cd => cd.isCollection)
     val tableCollectionColumnNames = tableCollectionColumns.map(_.columnName)
     val tableListColumnNames = tableCollectionColumns
       .map(c => (c.columnName, c.columnType))
-      .collect { case (name, x: ListType[_]) => name }
+      .collect { case (name, x: ListType[_]) => name } // check later
 
     val tableMapColumnNames = tableCollectionColumns
       .map(c => (c.columnName, c.columnType))
@@ -207,12 +215,13 @@ object TableWriter {
     val collectionBehaviorNormalColumn =
       collectionBehaviorColumnNames.toSet -- tableCollectionColumnNames.toSet
 
-    if (collectionBehaviorNormalColumn.nonEmpty)
-      throw new IllegalArgumentException(
+    val normalColumnsIllegalBehavior = validate( collectionBehaviorNormalColumn.nonEmpty) {
+      () => new IllegalArgumentException(
         s"""Collection behaviors (add/remove/append/prepend) are only allowed on collection columns.
            |Normal Columns with illegal behavior: ${collectionBehaviorNormalColumn.mkString}"""
           .stripMargin
       )
+    }
 
     //Check that prepend is used only on lists
     val prependBehaviorColumnNames = refsWithCollectionBehavior
@@ -220,11 +229,12 @@ object TableWriter {
       .map(_.columnName)
     val prependOnNonList = prependBehaviorColumnNames.toSet -- tableListColumnNames.toSet
 
-    if (prependOnNonList.nonEmpty)
-      throw new IllegalArgumentException(
+    val prependOnlyToLists = validate (prependOnNonList.nonEmpty) {
+      () => new IllegalArgumentException(
         s"""The prepend collection behavior only applies to Lists. Prepend used on:
-           |${prependOnNonList.mkString}""".stripMargin
-      )
+           |${prependOnNonList.mkString}""".stripMargin)
+    }
+
 
     //Check that remove is not used on Maps
 
@@ -234,18 +244,20 @@ object TableWriter {
 
     val removeOnMap = removeBehaviorColumnNames.toSet & tableMapColumnNames.toSet
 
-    if (removeOnMap.nonEmpty)
-      throw new IllegalArgumentException(
-        s"The remove operation is currently not supported for Maps. Remove used on: ${removeOnMap
-          .mkString}"
-      )
+    val removeOnlyFromMaps = validate(removeOnMap.nonEmpty) {
+      () => new IllegalArgumentException(
+        s"The remove operation is currently not supported for Maps. Remove used on: ${removeOnMap.mkString}")
+    }
+    checkAll(Seq(normalColumnsIllegalBehavior, prependOnlyToLists, removeOnlyFromMaps))
   }
 
-  private def checkColumns(table: TableDef, columnRefs: IndexedSeq[ColumnRef]) = {
+  private def checkColumns(table: TableDef, columnRefs: IndexedSeq[ColumnRef]): Check = {
     val columnNames = columnRefs.map(_.columnName)
-    checkMissingColumns(table, columnNames)
-    checkMissingPrimaryKeyColumns(table, columnNames)
-    checkCollectionBehaviors(table, columnRefs)
+    checkAll(Seq(
+      checkMissingColumns(table, columnNames),
+      checkMissingPrimaryKeyColumns(table, columnNames),
+      checkCollectionBehaviors(table, columnRefs)
+    ))
   }
 
   def apply[T : RowWriterFactory](
@@ -264,9 +276,10 @@ object TableWriter {
       tableDef.copy(regularColumns = tableDef.regularColumns ++ optionColumns),
       selectedColumns ++ optionColumns.map(_.ref))
 
-    checkColumns(tableDef, selectedColumns)
+    checkColumns(tableDef, selectedColumns).get //trigger rising an exception if any
 
     val ctx = WriterContext[T](rowWriter, writeConf, tableDef, selectedColumns)
     new TableWriter[T](connector, ctx)
   }
+
 }
