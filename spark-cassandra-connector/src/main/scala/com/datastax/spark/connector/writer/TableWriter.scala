@@ -14,6 +14,7 @@ import com.datastax.spark.connector.util.Quote._
 import org.apache.spark.{Logging, TaskContext}
 
 import scala.collection._
+import scala.util.{Failure, Try}
 
 
 private[connector] case class WriterContext[T](rowWriter: RowWriter[T], writeConf: WriteConf, tableDef:TableDef, columnSelector: IndexedSeq[ColumnRef]) {
@@ -58,10 +59,10 @@ private[connector] case class WriterContext[T](rowWriter: RowWriter[T], writeCon
     }).toMap
 
     val setNonCounterColumnsClause = for {
-      colDef <- nonCounterColumns
-      name = colDef.columnName
-      collectionBehavior = nameToBehavior.get(name)
-      quotedName = quote(name)
+    colDef <- nonCounterColumns
+    name = colDef.columnName
+    collectionBehavior = nameToBehavior.get(name)
+    quotedName = quote(name)
     } yield collectionBehavior match {
         case Some(CollectionAppend)           => s"$quotedName = $quotedName + :$quotedName"
         case Some(CollectionPrepend)          => s"$quotedName = :$quotedName + $quotedName"
@@ -83,6 +84,15 @@ private[connector] case class WriterContext[T](rowWriter: RowWriter[T], writeCon
     insertQueryTemplate
   }
 
+  def prepareStatement(session: Session): Try[PreparedStatement] = {
+    Try {
+      session.prepare(queryTemplate)
+    }.recoverWith {
+      case t: Throwable =>
+        Failure(new IOException(s"Failed to prepare statement $queryTemplate: ${t.getMessage}",t))
+    }
+  }
+
 }
 
 
@@ -91,16 +101,6 @@ private[connector] case class WriterContext[T](rowWriter: RowWriter[T], writeCon
   * Then, data are inserted into Cassandra with batches of CQL INSERT statements.
   * Each RDD partition is processed by a single thread. */
 private[connector] class TableWriter[T] private (connector: CassandraConnector, writerCtx: WriterContext[T]) extends Serializable with Logging {
-
-  private def prepareStatement(session: Session, writerCtx: WriterContext[T]): PreparedStatement = {
-    try {
-      session.prepare(writerCtx.queryTemplate)
-    }
-    catch {
-      case t: Throwable =>
-        throw new IOException(s"Failed to prepare statement ${writerCtx.queryTemplate}: ${t.getMessage}", t)
-    }
-  }
 
   def batchRoutingKey(session: Session, keyspaceName:String, routingKeyGenerator: RoutingKeyGenerator,
                       writeConf:WriteConf)(bs: BoundStatement): Any = {
@@ -131,8 +131,8 @@ private[connector] class TableWriter[T] private (connector: CassandraConnector, 
     val updater = OutputMetricsUpdater(taskContext, writerCtx.writeConf)
     connector.withSessionDo { session =>
       val rowIterator = new CountingIterator(data)
-      val stmt = prepareStatement(session, writerCtx)
-        stmt.setConsistencyLevel(writerCtx.writeConf.consistencyLevel)
+      val stmt = writerCtx.prepareStatement(session).get // throws an exception in case the table does not exists
+      stmt.setConsistencyLevel(writerCtx.writeConf.consistencyLevel)
       val queryExecutor = new QueryExecutor(session, writerCtx.writeConf.parallelismLevel,
         Some(updater.batchFinished(success = true, _, _, _)), Some(updater.batchFinished(success = false, _, _, _)))
       val routingKeyGenerator = new RoutingKeyGenerator(writerCtx.tableDef, colNames)
