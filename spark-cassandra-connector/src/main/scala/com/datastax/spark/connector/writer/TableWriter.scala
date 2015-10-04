@@ -26,6 +26,7 @@ private[connector] case class WriterContext[T](rowWriter: RowWriter[T], writeCon
   val keyspaceName:String = tableDef.keyspaceName
   val tableName = tableDef.tableName
   val batchType = if (isCounterUpdate) Type.COUNTER else Type.UNLOGGED
+  val routingKeyGenerator = new RoutingKeyGenerator(tableDef, columnNames)
 
   def insertQueryTemplate: String = {
     val quotedColumnNames: Seq[String] = columnNames.map(quote)
@@ -124,7 +125,7 @@ private[connector] class TableWriter[T] private (connector: CassandraConnector, 
   }
 
   /** Main entry point */
-  def writeToTable(taskContext: TaskContext, data: Iterator[T]) {
+  def write(taskContext: TaskContext, data: Iterator[T]) {
     val keyspace = writerCtx.keyspaceName
     val tableName = writerCtx.tableName
     val colNames = writerCtx.columnNames
@@ -135,11 +136,10 @@ private[connector] class TableWriter[T] private (connector: CassandraConnector, 
       stmt.setConsistencyLevel(writerCtx.writeConf.consistencyLevel)
       val queryExecutor = new QueryExecutor(session, writerCtx.writeConf.parallelismLevel,
         Some(updater.batchFinished(success = true, _, _, _)), Some(updater.batchFinished(success = false, _, _, _)))
-      val routingKeyGenerator = new RoutingKeyGenerator(writerCtx.tableDef, colNames)
 
       val boundStmtBuilder = new BoundStatementBuilder(writerCtx.rowWriter, stmt)
-      val batchStmtBuilder = new BatchStatementBuilder(writerCtx.batchType, routingKeyGenerator, writerCtx.writeConf.consistencyLevel)
-      val batchKeyGenerator = batchRoutingKey(session, keyspace, routingKeyGenerator, writerCtx.writeConf) _
+      val batchStmtBuilder = new BatchStatementBuilder(writerCtx.batchType, writerCtx.routingKeyGenerator, writerCtx.writeConf.consistencyLevel)
+      val batchKeyGenerator = batchRoutingKey(session, keyspace, writerCtx.routingKeyGenerator, writerCtx.writeConf) _
       val batchBuilder = new GroupingBatchBuilder(boundStmtBuilder, batchStmtBuilder, batchKeyGenerator,
         writerCtx.writeConf.batchSize, writerCtx.writeConf.batchGroupingBufferSize, rowIterator)
       val rateLimiter = new RateLimiter((writerCtx.writeConf.throughputMiBPS * 1024 * 1024).toLong, 1024 * 1024)

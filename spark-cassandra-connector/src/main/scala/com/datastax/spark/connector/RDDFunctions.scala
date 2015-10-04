@@ -35,7 +35,7 @@ class RDDFunctions[T](rdd: RDD[T]) extends WritableToCassandra[T] with Serializa
     rwf: RowWriterFactory[T]): Unit = {
 
     val writer = TableWriter(connector, keyspaceName, tableName, columns, writeConf)
-    rdd.sparkContext.runJob(rdd, writer.writeToTable _)
+    rdd.sparkContext.runJob(rdd, writer.write _)
   }
 
   def saveToCassandra[U](keyspaceFunc: T=>String,

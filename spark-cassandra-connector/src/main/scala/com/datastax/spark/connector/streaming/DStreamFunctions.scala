@@ -32,7 +32,7 @@ class DStreamFunctions[T](dstream: DStream[T]) extends WritableToCassandra[T] wi
     rwf: RowWriterFactory[T]): Unit = {
 
     val writer = TableWriter(connector, keyspaceName, tableName, columnNames, writeConf)
-    dstream.foreachRDD(rdd => rdd.sparkContext.runJob(rdd, writer.writeToTable _))
+    dstream.foreachRDD(rdd => rdd.sparkContext.runJob(rdd, writer.write _))
   }
 
   def saveToCassandra[U](keyspaceFunc: T=>String,
