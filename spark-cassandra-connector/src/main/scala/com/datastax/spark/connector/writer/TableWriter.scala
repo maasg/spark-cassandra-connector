@@ -172,7 +172,7 @@ object TableWriter {
   }
   def checkAll(checks:Seq[Check]): Check = checks.find(_.isFailure).getOrElse(Success(()))
 
-  private def checkMissingColumns(table: TableDef, columnNames: Seq[String]): Check = {
+  private[connector] def checkMissingColumns(table: TableDef, columnNames: Seq[String]): Check = {
     val allColumnNames = table.columns.map(_.columnName)
     val missingColumns = columnNames.toSet -- allColumnNames
     validate(missingColumns.nonEmpty) {
@@ -180,7 +180,7 @@ object TableWriter {
     }
   }
 
-  private def checkMissingPrimaryKeyColumns(table: TableDef, columnNames: Seq[String]): Check = {
+  private[connector] def checkMissingPrimaryKeyColumns(table: TableDef, columnNames: Seq[String]): Check = {
     val primaryKeyColumnNames = table.primaryKey.map(_.columnName)
     val missingPrimaryKeyColumns = primaryKeyColumnNames.toSet -- columnNames
     validate (missingPrimaryKeyColumns.nonEmpty) {
@@ -194,7 +194,7 @@ object TableWriter {
    * Check whether prepend is used on any Sets or Maps
    * Check whether remove is used on Maps
    */
-  private def checkCollectionBehaviors(table: TableDef, columnRefs: IndexedSeq[ColumnRef]):Check = {
+  private[connector] def checkCollectionBehaviors(table: TableDef, columnRefs: IndexedSeq[ColumnRef]):Check = {
     val tableCollectionColumns = table.columns.filter(cd => cd.isCollection)
     val tableCollectionColumnNames = tableCollectionColumns.map(_.columnName)
     val tableListColumnNames = tableCollectionColumns
@@ -251,7 +251,7 @@ object TableWriter {
     checkAll(Seq(normalColumnsIllegalBehavior, prependOnlyToLists, removeOnlyFromMaps))
   }
 
-  private def checkColumns(table: TableDef, columnRefs: IndexedSeq[ColumnRef]): Check = {
+  private[connector] def checkColumns(table: TableDef, columnRefs: IndexedSeq[ColumnRef]): Check = {
     val columnNames = columnRefs.map(_.columnName)
     checkAll(Seq(
       checkMissingColumns(table, columnNames),
@@ -283,3 +283,47 @@ object TableWriter {
   }
 
 }
+
+
+case class WriteStats(keyspace:String, table:String, records:Long)
+private[connector] class DataDependentWriter[T,U] (connector: CassandraConnector, writeConf: WriteConf,
+                                                   columnNames: ColumnSelector, keyspaceFunc: T => String, tableFunc: T=> String, dataFunc: T=>U
+                                                    ) extends Serializable with Logging {
+
+  //runJob[T, U](rdd: RDD[T], func: (TaskContext, Iterator[T]) ⇒ U)(implicit arg0: ClassTag[U]): Array[U]
+  val WriterExpirationInMs = 10000
+
+  // current limitations:
+  // does not support column selection
+
+  def write(taskContext: TaskContext, data: Iterator[T]): Seq[WriteStats] = {
+    type KeyspaceTable = (String, String)
+    // we instantiate a local cache on each executor
+    val contextCache: LoadingCache[KeyspaceTable, Try[WriterContext[U]]] = CacheBuilder.newBuilder()
+      .expireAfterWrite(WriterExpirationInMs, java.util.concurrent.TimeUnit.MILLISECONDS) // this needs a configuration
+      .build(
+        new CacheLoader[KeyspaceTable, Try[WriterContext[U]]]() {
+          def load(keyspaceTable: KeyspaceTable): Try[WriterContext[U]] = {
+            val (keyspace, table) = keyspaceTable
+            val schema = Schema.fromCassandra(connector, Some(keyspace), Some(table))
+            val tableDefNotFoundFailure: Try[TableDef] = Failure(new IOException(s"Table not found: $keyspace.$table"))
+            val tableDef = schema.tables.headOption.fold(tableDefNotFoundFailure)(Success(_))
+            val optionColumns = writeConf.optionsAsColumns(keyspace, table)
+            val selectedColumns = tableDef.map(t => columnNames.selectFrom(t))
+
+            for {t <- tableDef
+                 cols <- selectedColumns
+                 _ <- TableWriter.checkColumns(t, cols)
+            } yield {
+              val rowWriter = implicitly[RowWriterFactory[U]].rowWriter(
+                t.copy(regularColumns = t.regularColumns ++ optionColumns),
+                cols ++ optionColumns.map(_.ref))
+              WriterContext[U](rowWriter, writeConf, t, cols)
+            }
+          }
+        }
+      )
+    Seq()
+  }
+}
+
