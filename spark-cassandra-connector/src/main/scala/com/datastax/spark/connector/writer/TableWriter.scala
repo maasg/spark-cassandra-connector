@@ -286,12 +286,12 @@ object TableWriter {
 
 
 case class WriteStats(keyspace:String, table:String, records:Long)
-private[connector] class DataDependentWriter[T,U] (connector: CassandraConnector, writeConf: WriteConf,
+private[connector] class DataDependentWriter[T,U] (connector: CassandraConnector, writeConf: WriteConf, rowWriterFactory: RowWriterFactory[U],
                                                    columnNames: ColumnSelector, keyspaceFunc: T => String, tableFunc: T=> String, dataFunc: T=>U
                                                     ) extends Serializable with Logging {
 
   //runJob[T, U](rdd: RDD[T], func: (TaskContext, Iterator[T]) ⇒ U)(implicit arg0: ClassTag[U]): Array[U]
-  val WriterExpirationInMs = 10000
+  val WriterExpirationInMs = 10000 // this needs a configuration
 
   // current limitations:
   // does not support column selection
@@ -315,7 +315,7 @@ private[connector] class DataDependentWriter[T,U] (connector: CassandraConnector
                  cols <- selectedColumns
                  _ <- TableWriter.checkColumns(t, cols)
             } yield {
-              val rowWriter = implicitly[RowWriterFactory[U]].rowWriter(
+              val rowWriter = rowWriterFactory.rowWriter(
                 t.copy(regularColumns = t.regularColumns ++ optionColumns),
                 cols ++ optionColumns.map(_.ref))
               WriterContext[U](rowWriter, writeConf, t, cols)
