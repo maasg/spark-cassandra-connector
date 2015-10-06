@@ -88,25 +88,16 @@ private[connector] case class WriterContext[T](rowWriter: RowWriter[T], writeCon
 
   def prepareStatement(session: Session): Try[PreparedStatement] = {
     Try {
-      session.prepare(queryTemplate)
+      val stmt = session.prepare(queryTemplate)
+      stmt.setConsistencyLevel(writeConf.consistencyLevel)
+      stmt
     }.recoverWith {
       case t: Throwable =>
         Failure(new IOException(s"Failed to prepare statement $queryTemplate: ${t.getMessage}",t))
     }
   }
 
-}
-
-
-/** Writes RDD data into given Cassandra table.
-  * Individual column values are extracted from RDD objects using given [[RowWriter]]
-  * Then, data are inserted into Cassandra with batches of CQL INSERT statements.
-  * Each RDD partition is processed by a single thread. */
-private[connector] class TableWriter[T] private (connector: CassandraConnector, writerCtx: WriterContext[T]) extends Serializable with Logging {
-
-  def batchRoutingKey(session: Session, keyspaceName:String, routingKeyGenerator: RoutingKeyGenerator,
-                      writeConf:WriteConf)(bs: BoundStatement): Any = {
-
+  def batchRoutingKey(session: Session): BoundStatement => Any = { bs =>
     def setRoutingKeyIfMissing(bSttmt: BoundStatement): Unit =
       if (bSttmt.getRoutingKey == null) {
         bSttmt.setRoutingKey(routingKeyGenerator(bSttmt))
@@ -125,6 +116,17 @@ private[connector] class TableWriter[T] private (connector: CassandraConnector, 
     }
   }
 
+
+}
+
+
+/** Writes RDD data into given Cassandra table.
+  * Individual column values are extracted from RDD objects using given [[RowWriter]]
+  * Then, data are inserted into Cassandra with batches of CQL INSERT statements.
+  * Each RDD partition is processed by a single thread. */
+private[connector] class TableWriter[T] private (connector: CassandraConnector, writerCtx: WriterContext[T]) extends Serializable with Logging {
+
+
   /** Main entry point */
   def write(taskContext: TaskContext, data: Iterator[T]) {
     val keyspace = writerCtx.keyspaceName
@@ -134,13 +136,13 @@ private[connector] class TableWriter[T] private (connector: CassandraConnector, 
     connector.withSessionDo { session =>
       val rowIterator = new CountingIterator(data)
       val stmt = writerCtx.prepareStatement(session).get // throws an exception in case the table does not exists
-      stmt.setConsistencyLevel(writerCtx.writeConf.consistencyLevel)
+
       val queryExecutor = new QueryExecutor(session, writerCtx.writeConf.parallelismLevel,
         Some(updater.batchFinished(success = true, _, _, _)), Some(updater.batchFinished(success = false, _, _, _)))
 
       val boundStmtBuilder = new BoundStatementBuilder(writerCtx.rowWriter, stmt)
       val batchStmtBuilder = new BatchStatementBuilder(writerCtx.batchType, writerCtx.routingKeyGenerator, writerCtx.writeConf.consistencyLevel)
-      val batchKeyGenerator = batchRoutingKey(session, keyspace, writerCtx.routingKeyGenerator, writerCtx.writeConf) _
+      val batchKeyGenerator = writerCtx.batchRoutingKey(session)
       val batchBuilder = new GroupingBatchBuilder(boundStmtBuilder, batchStmtBuilder, batchKeyGenerator,
         writerCtx.writeConf.batchSize, writerCtx.writeConf.batchGroupingBufferSize, rowIterator)
       val rateLimiter = new RateLimiter((writerCtx.writeConf.throughputMiBPS * 1024 * 1024).toLong, 1024 * 1024)
@@ -323,6 +325,29 @@ private[connector] class DataDependentWriter[T,U] (connector: CassandraConnector
           }
         }
       )
+
+
+    val rowIterator = new CountingIterator(data)
+    val updater = OutputMetricsUpdater(taskContext, writeConf)
+    connector.withSessionDo { session =>
+      val queryExecutor = new QueryExecutor(session, writeConf.parallelismLevel,
+        Some(updater.batchFinished(success = true, _, _, _)), Some(updater.batchFinished(success = false, _, _, _)))
+      rowIterator.map { elem =>
+        val keyspace = keyspaceFunc(elem)
+        val table = tableFunc(elem)
+        val ctxWrap = contextCache.get((keyspace, table))
+        for { ctx <- ctxWrap
+              stmt <- ctx.prepareStatement(session)
+              boundStmtBuilder = new BoundStatementBuilder(ctx.rowWriter, stmt)
+              batchStmtBuilder = new BatchStatementBuilder(ctx.batchType, ctx.routingKeyGenerator, ctx.writeConf.consistencyLevel)
+              batchKeyGenerator = ctx.batchRoutingKey(session)
+
+
+        }{}
+
+      }
+    }
+
     Seq()
   }
 }
