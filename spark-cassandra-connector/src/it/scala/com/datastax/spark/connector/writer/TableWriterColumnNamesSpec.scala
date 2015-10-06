@@ -36,8 +36,8 @@ class TableWriterColumnNamesSpec extends SparkCassandraITAbstractSpecBase {
         writeConf = WriteConf()
       )
 
-      writer.columnNames.size should be (all.size)
-      writer.columnNames should be(all)
+      writer.writerCtx.columnNames.size should be (all.size)
+      writer.writerCtx.columnNames should be(all)
     }
 
     "distinguish and use only specified column names if provided" in {
@@ -51,8 +51,8 @@ class TableWriterColumnNamesSpec extends SparkCassandraITAbstractSpecBase {
         writeConf = WriteConf()
       )
 
-      writer.columnNames.size should be (subset.size)
-      writer.columnNames should be (Vector("key", "group"))
+      writer.writerCtx.columnNames.size should be (subset.size)
+      writer.writerCtx.columnNames should be (Vector("key", "group"))
     }
 
     "distinguish and use only specified column names if provided, when aliases are specified" in {
@@ -66,8 +66,8 @@ class TableWriterColumnNamesSpec extends SparkCassandraITAbstractSpecBase {
         writeConf = WriteConf()
       )
 
-      writer.columnNames.size should be (subset.size)
-      writer.columnNames should be (Vector("key", "group"))
+      writer.writerCtx.columnNames.size should be (subset.size)
+      writer.writerCtx.columnNames should be (Vector("key", "group"))
     }
 
     "fail in the RowWriter if provided specified column names do not include primary keys" in {
@@ -87,7 +87,7 @@ class TableWriterColumnNamesSpec extends SparkCassandraITAbstractSpecBase {
         writeConf = WriteConf(ttl = TTLOption.defaultValue, timestamp = TimestampOption.defaultValue)
       )
 
-      writer.queryTemplateUsingInsert should endWith (""")""")
+      writer.writerCtx.insertQueryTemplate should endWith (""")""")
     }
 
     "use static TTL if it is specified" in {
@@ -99,7 +99,7 @@ class TableWriterColumnNamesSpec extends SparkCassandraITAbstractSpecBase {
         writeConf = WriteConf(ttl = TTLOption.constant(1234), timestamp = TimestampOption.defaultValue)
       )
 
-      writer.queryTemplateUsingInsert should endWith (""") USING TTL 1234""")
+      writer.writerCtx.insertQueryTemplate should endWith (""") USING TTL 1234""")
     }
 
     "use static timestamp if it is specified" in {
@@ -111,7 +111,7 @@ class TableWriterColumnNamesSpec extends SparkCassandraITAbstractSpecBase {
         writeConf = WriteConf(ttl = TTLOption.defaultValue, timestamp = TimestampOption.constant(1400000000000L))
       )
 
-      writer.queryTemplateUsingInsert should endWith (""") USING TIMESTAMP 1400000000000""")
+      writer.writerCtx.insertQueryTemplate should endWith (""") USING TIMESTAMP 1400000000000""")
     }
 
     "use both static TTL and static timestamp when they are specified" in {
@@ -123,7 +123,7 @@ class TableWriterColumnNamesSpec extends SparkCassandraITAbstractSpecBase {
         writeConf = WriteConf(ttl = TTLOption.constant(1234), timestamp = TimestampOption.constant(1400000000000L))
       )
 
-      writer.queryTemplateUsingInsert should endWith (""") USING TTL 1234 AND TIMESTAMP 1400000000000""")
+      writer.writerCtx.insertQueryTemplate should endWith (""") USING TTL 1234 AND TIMESTAMP 1400000000000""")
     }
 
     "use per-row TTL and timestamp when the row writer provides them" in {
@@ -135,7 +135,7 @@ class TableWriterColumnNamesSpec extends SparkCassandraITAbstractSpecBase {
         writeConf = WriteConf(ttl = TTLOption.perRow("ttl_column"), timestamp = TimestampOption.perRow("timestamp_column"))
       )
 
-      writer.queryTemplateUsingInsert should endWith (""") USING TTL :ttl_column AND TIMESTAMP :timestamp_column""")
+      writer.writerCtx.insertQueryTemplate should endWith (""") USING TTL :ttl_column AND TIMESTAMP :timestamp_column""")
     }
 
     "use per-row TTL and static timestamp" in {
@@ -147,7 +147,7 @@ class TableWriterColumnNamesSpec extends SparkCassandraITAbstractSpecBase {
         writeConf = WriteConf(ttl = TTLOption.perRow("ttl_column"), timestamp = TimestampOption.constant(1400000000000L))
       )
 
-      writer.queryTemplateUsingInsert should endWith (""") USING TTL :ttl_column AND TIMESTAMP 1400000000000""")
+      writer.writerCtx.insertQueryTemplate  should endWith (""") USING TTL :ttl_column AND TIMESTAMP 1400000000000""")
     }
 
     "use per-row timestamp and static TTL" in {
@@ -159,7 +159,7 @@ class TableWriterColumnNamesSpec extends SparkCassandraITAbstractSpecBase {
         writeConf = WriteConf(ttl = TTLOption.constant(1234), timestamp = TimestampOption.perRow("timestamp_column"))
       )
 
-      writer.queryTemplateUsingInsert should endWith (""") USING TTL 1234 AND TIMESTAMP :timestamp_column""")
+      writer.writerCtx.insertQueryTemplate  should endWith (""") USING TTL 1234 AND TIMESTAMP :timestamp_column""")
     }
 
     "use per-row TTL" in {
@@ -171,7 +171,7 @@ class TableWriterColumnNamesSpec extends SparkCassandraITAbstractSpecBase {
         writeConf = WriteConf(ttl = TTLOption.perRow("ttl_column"), timestamp = TimestampOption.defaultValue)
       )
 
-      writer.queryTemplateUsingInsert should endWith (""") USING TTL :ttl_column""")
+      writer.writerCtx.insertQueryTemplate should endWith (""") USING TTL :ttl_column""")
     }
 
     "use per-row timestamp" in {
@@ -183,7 +183,7 @@ class TableWriterColumnNamesSpec extends SparkCassandraITAbstractSpecBase {
         writeConf = WriteConf(ttl = TTLOption.defaultValue, timestamp = TimestampOption.perRow("timestamp_column"))
       )
 
-      writer.queryTemplateUsingInsert should endWith (""") USING TIMESTAMP :timestamp_column""")
+      writer.writerCtx.insertQueryTemplate should endWith (""") USING TIMESTAMP :timestamp_column""")
     }
   }
 }

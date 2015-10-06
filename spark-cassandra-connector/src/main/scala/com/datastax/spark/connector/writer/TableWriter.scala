@@ -18,7 +18,10 @@ import scala.collection._
 import scala.util.{Success, Failure, Try}
 
 
-private[connector] case class WriterContext[T](rowWriter: RowWriter[T], writeConf: WriteConf, tableDef:TableDef, columnSelector: IndexedSeq[ColumnRef]) {
+private[connector] case class WriterContext[T](rowWriter: RowWriter[T],
+                                               writeConf: WriteConf,
+                                               tableDef:TableDef,
+                                               columnSelector: IndexedSeq[ColumnRef]) extends Serializable {
   type ColumnSelector = IndexedSeq[ColumnRef]
   val columnNames = rowWriter.columnNames diff writeConf.optionPlaceholders
   val columns:Seq[ColumnDef] = columnNames map(tableDef.columnByName)
@@ -27,7 +30,7 @@ private[connector] case class WriterContext[T](rowWriter: RowWriter[T], writeCon
   val keyspaceName:String = tableDef.keyspaceName
   val tableName = tableDef.tableName
   val batchType = if (isCounterUpdate) Type.COUNTER else Type.UNLOGGED
-  val routingKeyGenerator = new RoutingKeyGenerator(tableDef, columnNames)
+  lazy val routingKeyGenerator = new RoutingKeyGenerator(tableDef, columnNames)
 
   def insertQueryTemplate: String = {
     val quotedColumnNames: Seq[String] = columnNames.map(quote)
@@ -97,13 +100,13 @@ private[connector] case class WriterContext[T](rowWriter: RowWriter[T], writeCon
     }
   }
 
-  def batchRoutingKey(session: Session): BoundStatement => Any = { bs =>
+  def batchRoutingKey(session: Session): RichBoundStatement => KeyedRichBoundStatement = { bs =>
     def setRoutingKeyIfMissing(bSttmt: BoundStatement): Unit =
       if (bSttmt.getRoutingKey == null) {
         bSttmt.setRoutingKey(routingKeyGenerator(bSttmt))
       }
 
-    writeConf.batchGroupingKey match {
+    val key = writeConf.batchGroupingKey match {
       case BatchGroupingKey.None => 0
 
       case BatchGroupingKey.ReplicaSet =>
@@ -114,9 +117,8 @@ private[connector] case class WriterContext[T](rowWriter: RowWriter[T], writeCon
         setRoutingKeyIfMissing(bs)
         bs.getRoutingKey.duplicate()
     }
+    KeyedRichBoundStatement(key,bs)
   }
-
-
 }
 
 
@@ -124,7 +126,7 @@ private[connector] case class WriterContext[T](rowWriter: RowWriter[T], writeCon
   * Individual column values are extracted from RDD objects using given [[RowWriter]]
   * Then, data are inserted into Cassandra with batches of CQL INSERT statements.
   * Each RDD partition is processed by a single thread. */
-private[connector] class TableWriter[T] private (connector: CassandraConnector, writerCtx: WriterContext[T]) extends Serializable with Logging {
+private[connector] class TableWriter[T](connector: CassandraConnector, val writerCtx: WriterContext[T]) extends Serializable with Logging {
 
 
   /** Main entry point */
@@ -141,10 +143,13 @@ private[connector] class TableWriter[T] private (connector: CassandraConnector, 
         Some(updater.batchFinished(success = true, _, _, _)), Some(updater.batchFinished(success = false, _, _, _)))
 
       val boundStmtBuilder = new BoundStatementBuilder(writerCtx.rowWriter, stmt)
-      val batchStmtBuilder = new BatchStatementBuilder(writerCtx.batchType, writerCtx.routingKeyGenerator, writerCtx.writeConf.consistencyLevel)
       val batchKeyGenerator = writerCtx.batchRoutingKey(session)
-      val batchBuilder = new GroupingBatchBuilder(boundStmtBuilder, batchStmtBuilder, batchKeyGenerator,
-        writerCtx.writeConf.batchSize, writerCtx.writeConf.batchGroupingBufferSize, rowIterator)
+      val keyedRichBoundStatementIterator = rowIterator.map(boundStmtBuilder.bind _ andThen batchKeyGenerator)
+
+      val batchStmtBuilder = new BatchStatementBuilder(writerCtx.batchType, writerCtx.routingKeyGenerator, writerCtx.writeConf.consistencyLevel)
+      val batchBuilder = new GroupingBatchBuilder(batchStmtBuilder, writerCtx.writeConf.batchSize,
+        writerCtx.writeConf.batchGroupingBufferSize, keyedRichBoundStatementIterator)
+
       val rateLimiter = new RateLimiter((writerCtx.writeConf.throughputMiBPS * 1024 * 1024).toLong, 1024 * 1024)
 
       logDebug(s"Writing data partition to $keyspace.$tableName in batches of ${writerCtx.writeConf.batchSize}.")
@@ -344,6 +349,23 @@ private[connector] class DataDependentWriter[T,U] (connector: CassandraConnector
 
 
         }{}
+
+
+//        val batchBuilder = new GroupingBatchBuilder(boundStmtBuilder, batchStmtBuilder, batchKeyGenerator,
+//          writerCtx.writeConf.batchSize, writerCtx.writeConf.batchGroupingBufferSize, rowIterator)
+//        val rateLimiter = new RateLimiter((writerCtx.writeConf.throughputMiBPS * 1024 * 1024).toLong, 1024 * 1024)
+//
+//        logDebug(s"Writing data partition to $keyspace.$tableName in batches of ${writerCtx.writeConf.batchSize}.")
+//
+//        for (stmtToWrite <- batchBuilder) {
+//          queryExecutor.executeAsync(stmtToWrite)
+//          assert(stmtToWrite.bytesCount > 0)
+//          rateLimiter.maybeSleep(stmtToWrite.bytesCount)
+//        }
+//
+//        queryExecutor.waitForCurrentlyExecutingTasks()
+
+
 
       }
     }

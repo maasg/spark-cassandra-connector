@@ -6,8 +6,7 @@ import com.datastax.driver.core.BoundStatement
 import com.datastax.spark.connector.cql.TableDef
 
 /** This class computes the routing key of a bound statement. */
-class RoutingKeyGenerator(table: TableDef, columnNames: Seq[String])
-  extends ((BoundStatement) => ByteBuffer) {
+class RoutingKeyGenerator(table: TableDef, columnNames: Seq[String]) extends ((BoundStatement) => ByteBuffer) with Serializable{
 
   private val partitionKeyIdxs = {
     val missing = table.partitionKey
