@@ -34,7 +34,7 @@ class GroupingBatchBuilderSpec extends SparkCassandraITFlatSpecBase {
       val richBoundStatement = boundStmtBuilder.bind(e)
       KeyedRichBoundStatement(keyFunc(richBoundStatement), richBoundStatement)
     }
-    val batchStmtBuilder = new BatchStatementBuilder(Type.UNLOGGED, rkg, ConsistencyLevel.LOCAL_ONE)
+    val batchStmtBuilder = new RoutingBatchStatementBuilder(Type.UNLOGGED, ConsistencyLevel.LOCAL_ONE, rkg)
     new GroupingBatchBuilder(batchStmtBuilder, batchSize, maxBatches, richBoundStatementIter)
   }
 
