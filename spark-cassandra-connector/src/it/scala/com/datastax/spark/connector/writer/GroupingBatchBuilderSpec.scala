@@ -32,10 +32,10 @@ class GroupingBatchBuilderSpec extends SparkCassandraITFlatSpecBase {
     val boundStmtBuilder = new BoundStatementBuilder(rowWriter, stmt)
     val richBoundStatementIter = dataIter.map{e =>
       val richBoundStatement = boundStmtBuilder.bind(e)
-      KeyedRichBoundStatement(keyFunc(richBoundStatement), richBoundStatement)
+      KeyedRichBoundStatement(Type.UNLOGGED, keyFunc(richBoundStatement), richBoundStatement)
     }
-    val batchStmtBuilder = new RoutingBatchStatementBuilder(Type.UNLOGGED, ConsistencyLevel.LOCAL_ONE, rkg)
-    new GroupingBatchBuilder(batchStmtBuilder, batchSize, maxBatches, richBoundStatementIter)
+    val batcher = new BatcherBuilder(ConsistencyLevel.LOCAL_ONE).routingBatcher(rkg)
+    new GroupingBatchBuilder(batcher, batchSize, maxBatches, richBoundStatementIter)
   }
 
   def staticBatchKeyGen(bs: BoundStatement): Int = 0

@@ -106,7 +106,7 @@ private[connector] case class WriterContext[T](rowWriter: RowWriter[T],
         bSttmt.setRoutingKey(routingKeyGenerator(bSttmt))
       }
 
-    val key = writeConf.batchGroupingKey match {
+    val routingKey = writeConf.batchGroupingKey match {
       case BatchGroupingKey.None => 0
 
       case BatchGroupingKey.ReplicaSet =>
@@ -117,7 +117,7 @@ private[connector] case class WriterContext[T](rowWriter: RowWriter[T],
         setRoutingKeyIfMissing(bs)
         bs.getRoutingKey.duplicate()
     }
-    KeyedRichBoundStatement(key,bs)
+    KeyedRichBoundStatement(batchType, routingKey, bs)
   }
 
   val applyRoutingKey: RichBoundStatement => RichBoundStatement = { stmt =>
@@ -151,12 +151,10 @@ private[connector] class TableWriter[T](connector: CassandraConnector, val write
       val batchKeyGenerator = writerCtx.batchRoutingKey(session)
       val keyedRichBoundStatementIterator = rowIterator.map(boundStmtBuilder.bind _ andThen batchKeyGenerator)
 
-      val batchStmtBuilder = new RoutingBatchStatementBuilder(writerCtx.batchType,
-          writerCtx.writeConf.consistencyLevel,
-          writerCtx.routingKeyGenerator
-      )
+      val batcher = new BatcherBuilder(writerCtx.writeConf.consistencyLevel).routingBatcher(writerCtx.routingKeyGenerator)
 
-      val batchBuilder = new GroupingBatchBuilder(batchStmtBuilder, writerCtx.writeConf.batchSize,
+
+      val batchBuilder = new GroupingBatchBuilder(batcher, writerCtx.writeConf.batchSize,
         writerCtx.writeConf.batchGroupingBufferSize, keyedRichBoundStatementIterator)
 
       val rateLimiter = new RateLimiter((writerCtx.writeConf.throughputMiBPS * 1024 * 1024).toLong, 1024 * 1024)
@@ -251,7 +249,6 @@ object TableWriter {
            |${prependOnNonList.mkString}""".stripMargin)
     }
 
-
     //Check that remove is not used on Maps
 
     val removeBehaviorColumnNames = refsWithCollectionBehavior
@@ -299,7 +296,6 @@ object TableWriter {
   }
 
 }
-
 
 case class WriteStats(keyspace:String, table:String, records:Long)
 private[connector] class DataDependentWriter[T,U] (connector: CassandraConnector, writeConf: WriteConf, rowWriterFactory: RowWriterFactory[U],
@@ -356,17 +352,13 @@ private[connector] class DataDependentWriter[T,U] (connector: CassandraConnector
                               boundStmtBuilder = new BoundStatementBuilder(ctx.rowWriter, stmt)
                               batchKeyGenerator = ctx.batchRoutingKey(session)
 
-        } yield {
-            (boundStmtBuilder.bind _ andThen ctx.applyRoutingKey andThen batchKeyGenerator)(data)
-          }
+        } yield  (boundStmtBuilder.bind _ andThen ctx.applyRoutingKey andThen batchKeyGenerator)(data)
         maybeSttmt
       }
       val stmtIterator = maybeSttmtIterator.collect{case Success(e) => e}
+      val batcher = new BatcherBuilder(writeConf.consistencyLevel).simpleBatcher
 
-//      val batchStmtBuilder = new BatchStatementBuilder(ctx.batchType, ctx.routingKeyGenerator, writeConf.consistencyLevel)
-//
-//
-//        val batchBuilder = new GroupingBatchBuilder(boundStmtBuilder, batchStmtBuilder, batchKeyGenerator,
+      val batchBuilder = new GroupingBatchBuilder(batcher, writeConf.batchSize, writeConf.batchGroupingBufferSize,stmtIterator)
 //          writerCtx.writeConf.batchSize, writerCtx.writeConf.batchGroupingBufferSize, rowIterator)
 //        val rateLimiter = new RateLimiter((writerCtx.writeConf.throughputMiBPS * 1024 * 1024).toLong, 1024 * 1024)
 //

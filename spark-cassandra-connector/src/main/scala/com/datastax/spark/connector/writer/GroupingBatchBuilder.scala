@@ -3,6 +3,7 @@ package com.datastax.spark.connector.writer
 import com.datastax.driver.core._
 import com.datastax.spark.connector.BatchSize
 import com.datastax.spark.connector.util.PriorityHashMap
+import com.datastax.spark.connector.writer.writer.Batcher
 import com.google.common.collect.AbstractIterator
 
 import scala.annotation.tailrec
@@ -20,13 +21,13 @@ import scala.collection.Iterator
  *
  * The implementation is based on `PriorityHashMap`.
  *
- * @param batchStatementBuilder a configured batch statement builder
+ * @param batcher               a transformation function from batch type and statements into batches
  * @param batchSize             maximum batch size
  * @param maxBatches            maximum number of batches which can remain in the buffer
  * @param data                  data iterator
  */
 private[connector] class GroupingBatchBuilder(
-    batchStatementBuilder: BatchStatementBuilder,
+    batcher: Batcher,
     batchSize: BatchSize,
     maxBatches: Int,
     data: Iterator[KeyedRichBoundStatement]) extends Iterator[RichStatement] {
@@ -66,7 +67,7 @@ private[connector] class GroupingBatchBuilder(
     if (batchMap.size == maxBatches) {
       Some(replaceBatch(batchMap.dequeue(), stmt))
     } else {
-      val batch = Batch(batchSize)
+      val batch = Batch(stmt.batchType, batchSize)
       batch.add(stmt.richBoundStatement, force = true)
       batchMap.put(stmt.key, batch)
       None
@@ -76,7 +77,7 @@ private[connector] class GroupingBatchBuilder(
   /** Creates a statement from the given batch and cleans the batch so that it can be reused. */
   @inline
   final private def createStmtAndReleaseBatch(batch: Batch): RichStatement = {
-    val stmt = batchStatementBuilder.maybeCreateBatch(batch.statements)
+    val stmt = batcher(batch.batchType)(batch.statements)
     batch.clear()
     stmt
   }
