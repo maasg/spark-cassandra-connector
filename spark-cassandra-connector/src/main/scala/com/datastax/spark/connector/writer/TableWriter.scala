@@ -273,12 +273,25 @@ object TableWriter {
     ))
   }
 
-  def apply[T : RowWriterFactory](
+  def functionalWriter[T,U : RowWriterFactory](
       connector: CassandraConnector,
-      keyspaceName: String,
-      tableName: String,
+      keyspaceFunc: T => String,
+      tableFunc: T=> String,
+      dataFunc: T=> U,
       columnNames: ColumnSelector,
-      writeConf: WriteConf): TableWriter[T] = {
+      writeConf: WriteConf): DataDependentWriter[T,U] = {
+
+    val rowWriterFactory = implicitly[RowWriterFactory[U]]
+    new DataDependentWriter[T,U] (connector, writeConf: WriteConf, rowWriterFactory,
+                                               columnNames: ColumnSelector, keyspaceFunc, tableFunc, dataFunc)
+  }
+
+  def apply[T : RowWriterFactory](
+                                   connector: CassandraConnector,
+                                   keyspaceName: String,
+                                   tableName: String,
+                                   columnNames: ColumnSelector,
+                                   writeConf: WriteConf): TableWriter[T] = {
 
     val schema = Schema.fromCassandra(connector, Some(keyspaceName), Some(tableName))
     val tableDef = schema.tables.headOption
@@ -302,11 +315,7 @@ private[connector] class DataDependentWriter[T,U] (connector: CassandraConnector
                                                    columnNames: ColumnSelector, keyspaceFunc: T => String, tableFunc: T=> String, dataFunc: T=>U
                                                     ) extends Serializable with Logging {
 
-  //runJob[T, U](rdd: RDD[T], func: (TaskContext, Iterator[T]) ⇒ U)(implicit arg0: ClassTag[U]): Array[U]
   val WriterExpirationInMs = 10000 // this needs a configuration
-
-  // current limitations:
-  // does not support column selection
 
   def write(taskContext: TaskContext, data: Iterator[T]): Seq[WriteStats] = {
     type KeyspaceTable = (String, String)
@@ -359,20 +368,15 @@ private[connector] class DataDependentWriter[T,U] (connector: CassandraConnector
       val batcher = new BatcherBuilder(writeConf.consistencyLevel).simpleBatcher
 
       val batchBuilder = new GroupingBatchBuilder(batcher, writeConf.batchSize, writeConf.batchGroupingBufferSize,stmtIterator)
-//          writerCtx.writeConf.batchSize, writerCtx.writeConf.batchGroupingBufferSize, rowIterator)
-//        val rateLimiter = new RateLimiter((writerCtx.writeConf.throughputMiBPS * 1024 * 1024).toLong, 1024 * 1024)
-//
-//        logDebug(s"Writing data partition to $keyspace.$tableName in batches of ${writerCtx.writeConf.batchSize}.")
-//
-//        for (stmtToWrite <- batchBuilder) {
-//          queryExecutor.executeAsync(stmtToWrite)
-//          assert(stmtToWrite.bytesCount > 0)
-//          rateLimiter.maybeSleep(stmtToWrite.bytesCount)
-//        }
-//
-//        queryExecutor.waitForCurrentlyExecutingTasks()
+      val rateLimiter = new RateLimiter((writeConf.throughputMiBPS * 1024 * 1024).toLong, 1024 * 1024)
 
+      for (stmtToWrite <- batchBuilder) {
+          queryExecutor.executeAsync(stmtToWrite)
+          assert(stmtToWrite.bytesCount > 0)
+          rateLimiter.maybeSleep(stmtToWrite.bytesCount)
+      }
 
+      queryExecutor.waitForCurrentlyExecutingTasks()
     }
 
     Seq()

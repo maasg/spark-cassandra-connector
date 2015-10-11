@@ -50,9 +50,9 @@ abstract class WritableToCassandra[T] {
                      (implicit connector: CassandraConnector, rwf: RowWriterFactory[T])
 
 
-  def saveToCassandra[U](keyspaceName: T=>String,
-                         data: T=>U,
-                         tableName: String,
+  def saveToCassandra[U](keyspaceFunc: T => String,
+                         tableFunc: T=> String,
+                         dataFunc: T => U,
                          columnNames: ColumnSelector,
                          writeConf: WriteConf)
                         (implicit connector: CassandraConnector, rwf: RowWriterFactory[U]): Array[(String,Try[Unit])]

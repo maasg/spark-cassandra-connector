@@ -35,13 +35,14 @@ class DStreamFunctions[T](dstream: DStream[T]) extends WritableToCassandra[T] wi
     dstream.foreachRDD(rdd => rdd.sparkContext.runJob(rdd, writer.write _))
   }
 
-  def saveToCassandra[U](keyspaceFunc: T=>String,
-       dataFunc: T=>U,
-       tableName: String,
-       columnNames: ColumnSelector = AllColumns,
-       writeConf: WriteConf = WriteConf.fromSparkConf(sparkContext.getConf))(
-        implicit connector: CassandraConnector = CassandraConnector(sparkContext.getConf),
-        rwf: RowWriterFactory[U]): Array[(String,Try[Unit])] = {
+  def saveToCassandra[U](
+    keyspaceFunc: T => String,
+    tableFunc: T => String,
+    dataFunc: T=>U,
+    columnNames: ColumnSelector = AllColumns,
+    writeConf: WriteConf = WriteConf.fromSparkConf(sparkContext.getConf))(
+    implicit connector: CassandraConnector = CassandraConnector(sparkContext.getConf),
+    rwf: RowWriterFactory[U]): Array[(String,Try[Unit])] = {
     Array(("", Success()))
     // val writer = DynamicKeyspaceWritter(connector)
     // sparkContext.runJob(rdd, writer.write _, writer.write)

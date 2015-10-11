@@ -39,17 +39,16 @@ class RDDFunctions[T](rdd: RDD[T]) extends WritableToCassandra[T] with Serializa
   }
 
   def saveToCassandra[U](keyspaceFunc: T=>String,
+    tableFunc: T=> String,
     dataFunc: T=>U,
-    tableName: String,
     columnNames: ColumnSelector = AllColumns,
     writeConf: WriteConf = WriteConf.fromSparkConf(sparkContext.getConf))(
   implicit connector: CassandraConnector = CassandraConnector(sparkContext.getConf),
    rwf: RowWriterFactory[U]): Array[(String,Try[Unit])] = {
-    Array(("", Success()))
-    // val writer = DynamicKeyspaceWritter(connector)
-    // sparkContext.runJob(rdd, writer.write _, writer.write)
+    val writer = TableWriter.functionalWriter(connector, keyspaceFunc, tableFunc, dataFunc,columnNames, writeConf)
+    rdd.sparkContext.runJob(rdd, writer.write _)
+    Array()
   }
-
 
 
   /**
