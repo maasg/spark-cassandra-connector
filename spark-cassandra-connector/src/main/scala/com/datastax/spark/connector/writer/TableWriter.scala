@@ -283,7 +283,7 @@ object TableWriter {
 
     val rowWriterFactory = implicitly[RowWriterFactory[U]]
     new DataDependentWriter[T,U] (connector, writeConf: WriteConf, rowWriterFactory,
-                                               columnNames: ColumnSelector, keyspaceFunc, tableFunc, dataFunc)
+                                  columnNames: ColumnSelector, keyspaceFunc, tableFunc, dataFunc)
   }
 
   def apply[T : RowWriterFactory](

@@ -44,7 +44,6 @@ class DefaultColumnMapper[T : TypeTag](columnNameOverride: Map[String, String] =
   private val getters = ReflectionUtil.getters(tpe)
   private val setters = ReflectionUtil.setters(tpe)
 
-
   private def resolve(name: String, columns: Map[String, ColumnRef]): Option[ColumnRef] = {
     val overridenName = columnNameOverride.getOrElse(name, name)
     ColumnMapperConvention.columnForProperty(overridenName, columns)

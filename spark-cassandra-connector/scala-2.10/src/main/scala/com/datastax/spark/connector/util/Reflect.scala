@@ -13,8 +13,8 @@ private[connector] object Reflect {
     val paramCount = constructors.map(_.paramss.flatten.size).max
     constructors.filter(_.paramss.flatten.size == paramCount) match {
       case List(onlyOne) => onlyOne
-      case _             => throw new IllegalArgumentException(
-        "Multiple constructors with the same number of parameters not allowed.")
+      case more             => throw new IllegalArgumentException(
+        s"Multiple constructors with the same number of parameters not allowed: type [$tpe]: ${more.mkString(",")}")
     }
   }
 }
