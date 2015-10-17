@@ -52,13 +52,17 @@ abstract class WritableToCassandra[T] {
                      (implicit connector: CassandraConnector, rwf: RowWriterFactory[T])
 
 
+
+
+
   def dynamicSaveToCassandra[U](keyspaceFunc: T => String,
-                         tableFunc: T=> String,
-                         dataFunc: T => U,
-                         columnNames: ColumnSelector,
-                         writeConf: WriteConf)
-                         (implicit connector: CassandraConnector = CassandraConnector(sparkContext.getConf),
-                          targetType: ClassTag[U],
-                          rwf: RowWriterFactory[U]): Array[(String,Try[Unit])]
+                                tableFunc: T=> String,
+                                dataFunc: T => U,
+                                columnNames: ColumnSelector,
+                                writeConf: WriteConf)
+                               (implicit connector: CassandraConnector = CassandraConnector(sparkContext.getConf),
+                                targetType: TypeTag[U]): Array[(String,Try[Unit])]
 
 }
+
+

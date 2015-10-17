@@ -48,12 +48,11 @@ class RDDFunctions[T](rdd: RDD[T]) extends WritableToCassandra[T] with Serializa
     writeConf: WriteConf = WriteConf.fromSparkConf(sparkContext.getConf))(
   implicit
   connector: CassandraConnector = CassandraConnector(sparkContext.getConf),
-  targetType: TypeTag[U],
-  rwf: RowWriterFactory[U]): Array[(String,Try[Unit])] = {
+  targetType: TypeTag[U]): Array[(String,Try[Unit])] = {
     val closureCleaner = new ClosureCleanerProxy(sparkContext)
     val cleanKeyspaceFunc = closureCleaner.clean(keyspaceFunc)
     val cleanTableFunc = closureCleaner.clean(tableFunc)
-    val cleanDataFunc = closureCleaner.clean(tableFunc)
+    val cleanDataFunc = closureCleaner.clean(dataFunc)
     val writer = TableWriter.functionalWriter(connector, cleanKeyspaceFunc, cleanTableFunc, cleanDataFunc, columnNames, writeConf)
     rdd.sparkContext.runJob(rdd, writer.write _)
     Array()

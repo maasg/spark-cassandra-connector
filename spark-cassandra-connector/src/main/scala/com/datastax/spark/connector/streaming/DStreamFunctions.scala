@@ -44,8 +44,7 @@ class DStreamFunctions[T](dstream: DStream[T]) extends WritableToCassandra[T] wi
     writeConf: WriteConf = WriteConf.fromSparkConf(sparkContext.getConf))(
   implicit
     connector: CassandraConnector = CassandraConnector(sparkContext.getConf),
-    targetType: ClassTag[U],
-    rwf: RowWriterFactory[U]): Array[(String,Try[Unit])] = {
+    targetType: TypeTag[U]): Array[(String,Try[Unit])] = {
     Array(("", Success()))
     // val writer = DynamicKeyspaceWritter(connector)
     // sparkContext.runJob(rdd, writer.write _, writer.write)

@@ -2,7 +2,9 @@ package com.datastax.spark.connector.writer
 
 import java.io.IOException
 
+import com.datastax.spark.connector.mapper.{ColumnMapper, DefaultColumnMapper}
 import com.datastax.spark.connector.types.{MapType, ListType, ColumnType}
+import com.datastax.spark.connector.writer.RowWriterFactory
 import com.google.common.cache.{CacheLoader, CacheBuilder, LoadingCache}
 import org.apache.spark.metrics.OutputMetricsUpdater
 
@@ -15,6 +17,7 @@ import com.datastax.spark.connector.util.Quote._
 import org.apache.spark.{Logging, TaskContext}
 
 import scala.collection._
+import scala.reflect.runtime.universe.TypeTag
 import scala.util.{Success, Failure, Try}
 
 
@@ -132,7 +135,6 @@ private[connector] case class WriterContext[T](rowWriter: RowWriter[T],
   * Then, data are inserted into Cassandra with batches of CQL INSERT statements.
   * Each RDD partition is processed by a single thread. */
 private[connector] class TableWriter[T](connector: CassandraConnector, val writerCtx: WriterContext[T]) extends Serializable with Logging {
-
 
   /** Main entry point */
   def write(taskContext: TaskContext, data: Iterator[T]) {
@@ -273,7 +275,7 @@ object TableWriter {
     ))
   }
 
-  def functionalWriter[T,U : RowWriterFactory](
+  def functionalWriter[T, U: RowWriterFactory](
       connector: CassandraConnector,
       keyspaceFunc: T => String,
       tableFunc: T=> String,
@@ -281,9 +283,7 @@ object TableWriter {
       columnNames: ColumnSelector,
       writeConf: WriteConf): DataDependentWriter[T,U] = {
 
-    val rowWriterFactory = implicitly[RowWriterFactory[U]]
-    new DataDependentWriter[T,U] (connector, writeConf: WriteConf, rowWriterFactory,
-                                  columnNames: ColumnSelector, keyspaceFunc, tableFunc, dataFunc)
+    new DataDependentWriter[T,U] (connector, writeConf, columnNames, keyspaceFunc, tableFunc, dataFunc)
   }
 
   def apply[T : RowWriterFactory](
@@ -296,6 +296,7 @@ object TableWriter {
     val schema = Schema.fromCassandra(connector, Some(keyspaceName), Some(tableName))
     val tableDef = schema.tables.headOption
       .getOrElse(throw new IOException(s"Table not found: $keyspaceName.$tableName"))
+
     val selectedColumns = columnNames.selectFrom(tableDef)
     val optionColumns = writeConf.optionsAsColumns(keyspaceName, tableName)
     val rowWriter = implicitly[RowWriterFactory[T]].rowWriter(
@@ -311,9 +312,11 @@ object TableWriter {
 }
 
 case class WriteStats(keyspace:String, table:String, records:Long)
-private[connector] class DataDependentWriter[T,U] (connector: CassandraConnector, writeConf: WriteConf, rowWriterFactory: RowWriterFactory[U],
-                                                   columnNames: ColumnSelector, keyspaceFunc: T => String, tableFunc: T=> String, dataFunc: T=>U
-                                                    ) extends Serializable with Logging {
+private[connector] class DataDependentWriter[T,U: RowWriterFactory] (connector: CassandraConnector, writeConf: WriteConf,
+                                                   columnNames: ColumnSelector, keyspaceFunc: T => String,
+                                                   tableFunc: T=> String, dataFunc: T=>U
+                                                   )  extends Serializable with Logging {
+
 
   val WriterExpirationInMs = 10000 // this needs a configuration
 
@@ -327,24 +330,23 @@ private[connector] class DataDependentWriter[T,U] (connector: CassandraConnector
           def load(keyspaceTable: KeyspaceTable): Try[WriterContext[U]] = {
             val (keyspace, table) = keyspaceTable
             val schema = Schema.fromCassandra(connector, Some(keyspace), Some(table))
-            val tableDefNotFoundFailure: Try[TableDef] = Failure(new IOException(s"Table not found: $keyspace.$table"))
-            val tableDef = schema.tables.headOption.fold(tableDefNotFoundFailure)(Success(_))
+            val tableDefNotFoundFailure: () => Try[TableDef] = () => Failure(new IOException(s"Table not found: $keyspace.$table"))
+            val tableDef = schema.tables.headOption.map(Success(_)).getOrElse (tableDefNotFoundFailure())
             val optionColumns = writeConf.optionsAsColumns(keyspace, table)
             val selectedColumns = tableDef.map(t => columnNames.selectFrom(t))
 
             for {t <- tableDef
                  cols <- selectedColumns
-                 _ <- TableWriter.checkColumns(t, cols)
+                 check <- TableWriter.checkColumns(t, cols)
             } yield {
-              val rowWriter = rowWriterFactory.rowWriter(
-                t.copy(regularColumns = t.regularColumns ++ optionColumns),
+              implicit val rowWriterFactory = implicitly[RowWriterFactory[U]]
+              val rowWriter = rowWriterFactory.rowWriter(t.copy(regularColumns = t.regularColumns ++ optionColumns),
                 cols ++ optionColumns.map(_.ref))
               WriterContext[U](rowWriter, writeConf, t, cols)
             }
           }
         }
       )
-
 
     val rowIterator = new CountingIterator(data)
     val updater = OutputMetricsUpdater(taskContext, writeConf)
@@ -354,7 +356,7 @@ private[connector] class DataDependentWriter[T,U] (connector: CassandraConnector
       val maybeSttmtIterator = rowIterator.map { elem =>
         val keyspace = keyspaceFunc(elem)
         val table = tableFunc(elem)
-        val data = dataFunc(elem)
+        val data:U = dataFunc(elem)
         val ctxWrap = contextCache.get((keyspace, table))
         val maybeSttmt = for {ctx <- ctxWrap
                               stmt <- ctx.prepareStatement(session)
