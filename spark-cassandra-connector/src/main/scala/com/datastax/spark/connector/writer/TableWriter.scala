@@ -24,7 +24,8 @@ import scala.util.{Success, Failure, Try}
 private[connector] case class WriterContext[T](rowWriter: RowWriter[T],
                                                writeConf: WriteConf,
                                                tableDef:TableDef,
-                                               columnSelector: IndexedSeq[ColumnRef]) extends Serializable {
+                                               columnSelector: IndexedSeq[ColumnRef]
+                                               ) extends Serializable {
   type ColumnSelector = IndexedSeq[ColumnRef]
   val columnNames = rowWriter.columnNames diff writeConf.optionPlaceholders
   val columns:Seq[ColumnDef] = columnNames map(tableDef.columnByName)
@@ -134,11 +135,13 @@ private[connector] case class WriterContext[T](rowWriter: RowWriter[T],
   * Individual column values are extracted from RDD objects using given [[RowWriter]]
   * Then, data are inserted into Cassandra with batches of CQL INSERT statements.
   * Each RDD partition is processed by a single thread. */
-private[connector] class TableWriter[T](connector: CassandraConnector, val writerCtx: WriterContext[T]) extends Serializable with Logging {
+private[connector] class TableWriter[T](connector: CassandraConnector,
+                                        val writerCtx: WriterContext[T]
+                                         ) extends Serializable with Logging {
 
   /** Main entry point */
   def write(taskContext: TaskContext, data: Iterator[T]) {
-    val keyspace = writerCtx.keyspaceName
+    val keyspaceName = writerCtx.keyspaceName
     val tableName = writerCtx.tableName
     val colNames = writerCtx.columnNames
     val updater = OutputMetricsUpdater(taskContext, writerCtx.writeConf)
@@ -161,7 +164,7 @@ private[connector] class TableWriter[T](connector: CassandraConnector, val write
 
       val rateLimiter = new RateLimiter((writerCtx.writeConf.throughputMiBPS * 1024 * 1024).toLong, 1024 * 1024)
 
-      logDebug(s"Writing data partition to $keyspace.$tableName in batches of ${writerCtx.writeConf.batchSize}.")
+      logDebug(s"Writing data partition to $keyspaceName.$tableName in batches of ${writerCtx.writeConf.batchSize}.")
 
       for (stmtToWrite <- batchBuilder) {
         queryExecutor.executeAsync(stmtToWrite)
@@ -172,10 +175,10 @@ private[connector] class TableWriter[T](connector: CassandraConnector, val write
       queryExecutor.waitForCurrentlyExecutingTasks()
 
       if (!queryExecutor.successful)
-        throw new IOException(s"Failed to write statements to $keyspace.$tableName.")
+        throw new IOException(s"Failed to write statements to $keyspaceName.$tableName.")
 
       val duration = updater.finish() / 1000000000d
-      logInfo(f"Wrote ${rowIterator.count} rows to $keyspace.$tableName in $duration%.3f s.")
+      logInfo(f"Wrote ${rowIterator.count} rows to $keyspaceName.$tableName in $duration%.3f s.")
     }
   }
 }
@@ -286,12 +289,12 @@ object TableWriter {
     new DataDependentWriter[T,U] (connector, writeConf, columnNames, keyspaceFunc, tableFunc, dataFunc)
   }
 
-  def apply[T : RowWriterFactory](
-                                   connector: CassandraConnector,
-                                   keyspaceName: String,
-                                   tableName: String,
-                                   columnNames: ColumnSelector,
-                                   writeConf: WriteConf): TableWriter[T] = {
+  def apply[T : RowWriterFactory](connector: CassandraConnector,
+                                  keyspaceName: String,
+                                  tableName: String,
+                                  columnNames: ColumnSelector,
+                                  writeConf: WriteConf
+                                  ): TableWriter[T] = {
 
     val schema = Schema.fromCassandra(connector, Some(keyspaceName), Some(tableName))
     val tableDef = schema.tables.headOption
@@ -312,11 +315,11 @@ object TableWriter {
 }
 
 case class WriteStats(keyspace:String, table:String, records:Long)
-private[connector] class DataDependentWriter[T,U: RowWriterFactory] (connector: CassandraConnector, writeConf: WriteConf,
-                                                   columnNames: ColumnSelector, keyspaceFunc: T => String,
-                                                   tableFunc: T=> String, dataFunc: T=>U
-                                                   )  extends Serializable with Logging {
-
+private[connector] class DataDependentWriter[T,U: RowWriterFactory] (connector: CassandraConnector,
+                                                                     writeConf: WriteConf,
+                                                                     columnNames: ColumnSelector, keyspaceFunc: T => String,
+                                                                     tableFunc: T=> String, dataFunc: T=>U
+                                                                     )  extends Serializable with Logging {
 
   val WriterExpirationInMs = 10000 // this needs a configuration
 
