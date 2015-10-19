@@ -10,10 +10,13 @@ import com.datastax.spark.connector.rdd.reader._
 import com.datastax.spark.connector.rdd.{CassandraJoinRDD, SpannedRDD, ValidRDDType}
 import com.datastax.spark.connector.writer.{ReplicaLocator, _}
 import org.apache.spark.SparkContext
+import org.apache.spark.ClosureCleanerProxy
 import org.apache.spark.SparkContext._
 import org.apache.spark.rdd.RDD
 
 import scala.reflect.ClassTag
+import scala.reflect.runtime.universe.TypeTag
+import scala.util.{Success, Try}
 
 /** Provides Cassandra-specific methods on [[org.apache.spark.rdd.RDD RDD]] */
 class RDDFunctions[T](rdd: RDD[T]) extends WritableToCassandra[T] with Serializable {
@@ -36,6 +39,25 @@ class RDDFunctions[T](rdd: RDD[T]) extends WritableToCassandra[T] with Serializa
     val writer = TableWriter(connector, keyspaceName, tableName, columns, writeConf)
     rdd.sparkContext.runJob(rdd, writer.write _)
   }
+
+  def dynamicSaveToCassandra[U](
+    keyspaceFunc: T=>String,
+    tableFunc: T=> String,
+    dataFunc: T=>U,
+    columnNames: ColumnSelector = AllColumns,
+    writeConf: WriteConf = WriteConf.fromSparkConf(sparkContext.getConf))(
+  implicit
+  connector: CassandraConnector = CassandraConnector(sparkContext.getConf),
+  targetType: TypeTag[U]): Array[(String,Try[Unit])] = {
+    val closureCleaner = new ClosureCleanerProxy(sparkContext)
+    val cleanKeyspaceFunc = closureCleaner.clean(keyspaceFunc)
+    val cleanTableFunc = closureCleaner.clean(tableFunc)
+    val cleanDataFunc = closureCleaner.clean(dataFunc)
+    val writer = TableWriter.functionalWriter(connector, cleanKeyspaceFunc, cleanTableFunc, cleanDataFunc, columnNames, writeConf)
+    rdd.sparkContext.runJob(rdd, writer.write _)
+    Array()
+  }
+
 
   /**
    * Saves the data from [[org.apache.spark.rdd.RDD RDD]] to a new table defined by the given `TableDef`.

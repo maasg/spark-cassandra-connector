@@ -47,6 +47,10 @@ class TableWriterSpec extends SparkCassandraITFlatSpecBase {
       session.execute(s"""CREATE TABLE IF NOT EXISTS "$ks".key_value_$x (key INT, group BIGINT, value TEXT, PRIMARY KEY (key, group))""")
     }
 
+    for (x <- 1 to 5) {
+      session.execute(s"""CREATE TABLE IF NOT EXISTS "$ks".multi_$x (key INT, group BIGINT, value TEXT, PRIMARY KEY (key, group))""")
+    }
+
     session.execute(s"""CREATE TABLE IF NOT EXISTS "$ks".nulls (key INT PRIMARY KEY, text_value TEXT, int_value INT)""")
     session.execute(s"""CREATE TABLE IF NOT EXISTS "$ks".collections (key INT PRIMARY KEY, l list<text>, s set<text>, m map<text, text>)""")
     session.execute(s"""CREATE TABLE IF NOT EXISTS "$ks".collections_mod (key INT PRIMARY KEY, lcol list<text>, scol set<text>, mcol map<text, text>)""")
@@ -85,6 +89,25 @@ class TableWriterSpec extends SparkCassandraITFlatSpecBase {
     verifyKeyValueTable("key_value_1")
   }
 
+  it should "write data from the RDD to different keyspaces following the functional mapping" in {
+
+    val tables = (1 to 3 ).map (i => s"key_value_$i")
+    val values = Seq((1, 1L, "value1"), (2, 2L, "value2"), (3, 3L, "value3"))
+    val valuesWithTable = tables.flatMap(t => values.map(v => (t,v)))
+    // little trick to avoid outer scope creep into the closures
+    val scope = new Serializable {
+      val _ks = ks
+      val ksF: ((String, (Int, Long, String))) => String = x => _ks
+      val tableF: ((String, (Int, Long, String))) => String = dt => dt._1
+      val dataF: ((String, (Int, Long, String))) => (Int, Long, String) = dt => dt._2
+
+      val res = sc.parallelize(valuesWithTable).dynamicSaveToCassandra(ksF, tableF, dataF)
+    }
+    val res = scope.res
+
+    tables.foreach(table => verifyKeyValueTable(table))
+  }
+
   it should "write RDD of tuples to a new table" in {
     val pkey = ColumnDef("key", PartitionKeyColumn, IntType)
     val group = ColumnDef("group", ClusteringColumn(0), BigIntType)
@@ -92,6 +115,7 @@ class TableWriterSpec extends SparkCassandraITFlatSpecBase {
     val table = TableDef(ks, "new_kv_table", Seq(pkey), Seq(group), Seq(value))
     val rows = Seq((1, 1L, "value1"), (2, 2L, "value2"), (3, 3L, "value3"))
     sc.parallelize(rows).saveAsCassandraTableEx(table, SomeColumns("key", "group", "value"))
+
     verifyKeyValueTable("new_kv_table")
   }
 

@@ -3,6 +3,10 @@ package com.datastax.spark.connector.writer
 import com.datastax.spark.connector.ColumnSelector
 import com.datastax.spark.connector.cql.CassandraConnector
 import org.apache.spark.SparkContext
+import scala.reflect.ClassTag
+import scala.reflect.runtime.universe.TypeTag
+
+import scala.util.{Success, Try}
 
 abstract class WritableToCassandra[T] {
 
@@ -47,4 +51,18 @@ abstract class WritableToCassandra[T] {
                       writeConf: WriteConf)
                      (implicit connector: CassandraConnector, rwf: RowWriterFactory[T])
 
+
+
+
+
+  def dynamicSaveToCassandra[U](keyspaceFunc: T => String,
+                                tableFunc: T=> String,
+                                dataFunc: T => U,
+                                columnNames: ColumnSelector,
+                                writeConf: WriteConf)
+                               (implicit connector: CassandraConnector = CassandraConnector(sparkContext.getConf),
+                                targetType: TypeTag[U]): Array[(String,Try[Unit])]
+
 }
+
+

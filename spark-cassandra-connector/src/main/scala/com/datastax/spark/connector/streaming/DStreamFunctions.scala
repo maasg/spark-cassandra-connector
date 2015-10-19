@@ -10,6 +10,8 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.streaming.dstream.DStream
 
 import scala.reflect.ClassTag
+import scala.reflect.runtime.universe.TypeTag
+import scala.util.{Success, Try}
 
 class DStreamFunctions[T](dstream: DStream[T]) extends WritableToCassandra[T] with Serializable {
 
@@ -33,6 +35,22 @@ class DStreamFunctions[T](dstream: DStream[T]) extends WritableToCassandra[T] wi
     val writer = TableWriter(connector, keyspaceName, tableName, columnNames, writeConf)
     dstream.foreachRDD(rdd => rdd.sparkContext.runJob(rdd, writer.write _))
   }
+
+  def dynamicSaveToCassandra[U](
+    keyspaceFunc: T => String,
+    tableFunc: T => String,
+    dataFunc: T=>U,
+    columnNames: ColumnSelector = AllColumns,
+    writeConf: WriteConf = WriteConf.fromSparkConf(sparkContext.getConf))(
+  implicit
+    connector: CassandraConnector = CassandraConnector(sparkContext.getConf),
+    targetType: TypeTag[U]): Array[(String,Try[Unit])] = {
+    Array(("", Success()))
+    // val writer = DynamicKeyspaceWritter(connector)
+    // sparkContext.runJob(rdd, writer.write _, writer.write)
+  }
+
+
 
   /**
    * Transforms RDDs with [[com.datastax.spark.connector.RDDFunctions.repartitionByCassandraReplica]]

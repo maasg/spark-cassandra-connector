@@ -14,6 +14,13 @@ private[connector] class RichBoundStatement(stmt: PreparedStatement) extends Bou
   val rowsCount = 1
 }
 
+private[connector] case class KeyedRichBoundStatement(
+    batchType:BatchStatement.Type,
+    routingKey:Any,
+    richBoundStatement: RichBoundStatement){
+  val key = (batchType, routingKey)
+}
+
 private[connector] class RichBatchStatement(batchType: BatchStatement.Type, stmts: Seq[RichBoundStatement])
     extends BatchStatement(batchType) with RichStatement {
 

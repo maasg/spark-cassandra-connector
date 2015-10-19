@@ -4,15 +4,21 @@ package com.datastax.spark.connector.util
 class CountingIterator[T](iterator: Iterator[T], limit: Option[Long] = None) extends Iterator[T] {
   private var _count = 0
 
+  val limitCondition: () => Boolean = {
+    if (limit.isDefined) {
+      val limitValue = limit.get
+      () => _count < limitValue && iterator.hasNext
+    } else {
+      () => iterator.hasNext
+    }
+  }
+
   /** Returns the number of successful invocations of `next` */
   def count = _count
 
-  def hasNext = limit match {
-    case Some(l) => _count < l && iterator.hasNext
-    case _ => iterator.hasNext
-  }
+  override def hasNext = limitCondition()
 
-  def next() = {
+  override def next() = {
     val item = iterator.next()
     _count += 1
     item

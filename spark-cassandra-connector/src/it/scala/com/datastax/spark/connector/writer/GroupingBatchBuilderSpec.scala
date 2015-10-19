@@ -26,11 +26,16 @@ class GroupingBatchBuilderSpec extends SparkCassandraITFlatSpecBase {
   val rowWriter = RowWriterFactory.defaultRowWriterFactory[(Int, String)].rowWriter(schema.tables.head, IndexedSeq("id", "value"))
   val rkg = new RoutingKeyGenerator(schema.tables.head, Seq("id", "value"))
 
-  def makeBatchBuilder(session: Session): (BoundStatement => Any, BatchSize, Int, Iterator[(Int, String)]) => GroupingBatchBuilder[(Int, String)] = {
+  def makeBatchBuilder(session: Session): (BoundStatement => Any, BatchSize, Int, Iterator[(Int, String)]) => GroupingBatchBuilder =
+  {(keyFunc, batchSize, maxBatches, dataIter) =>
     val stmt = session.prepare(s"""INSERT INTO "$ks".tab (id, value) VALUES (:id, :value)""")
     val boundStmtBuilder = new BoundStatementBuilder(rowWriter, stmt)
-    val batchStmtBuilder = new BatchStatementBuilder(Type.UNLOGGED, rkg, ConsistencyLevel.LOCAL_ONE)
-    new GroupingBatchBuilder[(Int, String)](boundStmtBuilder, batchStmtBuilder, _: BoundStatement => Any, _: BatchSize, _: Int, _: Iterator[(Int, String)])
+    val richBoundStatementIter = dataIter.map{e =>
+      val richBoundStatement = boundStmtBuilder.bind(e)
+      KeyedRichBoundStatement(Type.UNLOGGED, keyFunc(richBoundStatement), richBoundStatement)
+    }
+    val batcher = new BatcherBuilder(ConsistencyLevel.LOCAL_ONE).routingBatcher(rkg)
+    new GroupingBatchBuilder(batcher, batchSize, maxBatches, richBoundStatementIter)
   }
 
   def staticBatchKeyGen(bs: BoundStatement): Int = 0

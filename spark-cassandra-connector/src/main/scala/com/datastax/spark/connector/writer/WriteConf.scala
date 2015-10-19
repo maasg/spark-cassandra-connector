@@ -46,6 +46,16 @@ case class WriteConf(batchSize: BatchSize = BatchSize.Automatic,
     Seq(toRegularColDef(ttl, DataType.cint()), toRegularColDef(timestamp, DataType.bigint())).flatten
   }
 
+  val defaultTTL = ttl match {
+    case TTLOption(StaticWriteOptionValue(value)) => Some(value)
+    case _ => None
+  }
+
+  val defaultTimestamp = timestamp match {
+    case TimestampOption(StaticWriteOptionValue(value)) => Some(value)
+    case _ => None
+  }
+
   val throttlingEnabled = throughputMiBPS < WriteConf.DefaultThroughputMiBPS
 }
 

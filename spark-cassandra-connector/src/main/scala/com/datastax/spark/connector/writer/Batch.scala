@@ -1,5 +1,6 @@
 package com.datastax.spark.connector.writer
 
+import com.datastax.driver.core.BatchStatement
 import com.datastax.spark.connector.{BatchSize, BytesInBatch, RowsInBatch}
 
 import scala.collection.mutable.ArrayBuffer
@@ -30,22 +31,27 @@ private[writer] sealed trait Batch extends Ordered[Batch] {
 
   /** Returns bytes count of the batch */
   def bytesCount: Int = _bytesCount
+
+  /** Returns the type of the batch **/
+  val batchType:BatchStatement.Type
+
 }
 
 private[writer] object Batch {
 
   implicit val batchOrdering = Ordering.ordered[Batch]
 
-  def apply(batchSize: BatchSize): Batch = {
+  def apply(batchType: BatchStatement.Type, batchSize: BatchSize): Batch = {
     batchSize match {
-      case RowsInBatch(rows) => new RowLimitedBatch(rows)
-      case BytesInBatch(bytes) => new SizeLimitedBatch(bytes)
+      case RowsInBatch(rows) => new RowLimitedBatch(batchType, rows)
+      case BytesInBatch(bytes) => new SizeLimitedBatch(batchType, bytes)
     }
   }
 }
 
+
 /** The implementation which uses the number of items as a size constraint. */
-private[writer] class RowLimitedBatch(val maxRows: Int) extends Batch {
+private[writer] class RowLimitedBatch(val batchType:BatchStatement.Type, val maxRows: Int) extends Batch {
   override protected[writer] val buf = new ArrayBuffer[RichBoundStatement](maxRows)
 
   override def add(stmt: RichBoundStatement, force: Boolean = false): Boolean = {
@@ -63,7 +69,7 @@ private[writer] class RowLimitedBatch(val maxRows: Int) extends Batch {
 }
 
 /** The implementation which uses length in bytes as a size constraint. */
-private[writer] class SizeLimitedBatch(val maxBytes: Int) extends Batch {
+private[writer] class SizeLimitedBatch(val batchType:BatchStatement.Type, val maxBytes: Int) extends Batch {
   override protected[writer] val buf = new ArrayBuffer[RichBoundStatement](10)
 
   override def add(stmt: RichBoundStatement, force: Boolean = false): Boolean = {
